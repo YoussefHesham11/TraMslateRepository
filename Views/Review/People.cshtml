@@ -1,0 +1,145 @@
+@model List<TraMslate.Models.ProjectMember>
+@using TraMslate.Models
+@{
+    var project = (Project)ViewBag.Project;
+    var canManage = (bool)ViewBag.CanManage;
+    var rounds = (List<ReviewRound>)ViewBag.Rounds;
+    ViewData["Title"] = $"People — {project.Title}";
+
+    string VerdictLabel(ReviewVerdict v) => v switch
+    {
+        ReviewVerdict.Approved => "Approved",
+        ReviewVerdict.ChangesRequested => "Changes requested",
+        _ => "In progress",
+    };
+}
+
+<div class="tm-page-header">
+    <div>
+        <h1 class="tm-page-title">@project.Title</h1>
+        <p class="tm-page-sub">
+            @project.SourceLanguage &rarr; @project.TargetLanguage
+            &nbsp;·&nbsp; Who is on this project, and how its revisions have gone.
+        </p>
+    </div>
+    <a asp-controller="Project" asp-action="Editor" asp-route-id="@project.Id" class="tm-btn tm-btn-primary" style="width:auto;">
+        <i class="bi bi-pencil-square"></i> Open editor
+    </a>
+</div>
+
+@if (TempData["PeopleError"] is string error)
+{
+    <div class="tm-notice tm-notice-error"><i class="bi bi-exclamation-triangle-fill"></i> @error</div>
+}
+@if (TempData["PeopleNotice"] is string notice)
+{
+    <div class="tm-notice tm-notice-ok"><i class="bi bi-check-circle-fill"></i> @notice</div>
+}
+
+<div class="tm-people-layout">
+    <section class="tm-card tm-people-card">
+        <h2 class="tm-section-title"><i class="bi bi-people"></i> People</h2>
+
+        <ul class="tm-people-list">
+            <li class="tm-person">
+                <span class="tm-person-avatar"><i class="bi bi-person-fill"></i></span>
+                <span class="tm-person-name">
+                    @ViewBag.OwnerName
+                    <span class="tm-person-email">@ViewBag.OwnerEmail</span>
+                </span>
+                <span class="tm-person-role tm-person-role-translator">Translator · owner</span>
+            </li>
+
+            @foreach (var member in Model)
+            {
+                <li class="tm-person">
+                    <span class="tm-person-avatar"><i class="bi bi-person-fill"></i></span>
+                    <span class="tm-person-name">
+                        @(member.User?.FullName ?? "Unknown")
+                        <span class="tm-person-email">@member.User?.Email</span>
+                    </span>
+                    <span class="tm-person-role tm-person-role-revisor">@member.Role</span>
+                    @if (canManage)
+                    {
+                        <form asp-action="RemoveMember" asp-route-id="@project.Id" asp-route-memberId="@member.Id"
+                              method="post" class="tm-person-remove">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="tm-btn-sm" title="Remove from this project"
+                                    aria-label="Remove @(member.User?.FullName) from this project">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </form>
+                    }
+                </li>
+            }
+        </ul>
+
+        @if (canManage)
+        {
+            <form asp-action="Invite" asp-route-id="@project.Id" method="post" class="tm-invite-form">
+                @Html.AntiForgeryToken()
+                <label for="inviteEmail">Invite a revisor</label>
+                <div class="tm-tool-row">
+                    <input id="inviteEmail" name="email" type="email" required
+                           placeholder="their@email.com" aria-describedby="inviteHint" />
+                    <button type="submit" class="tm-btn tm-btn-primary" style="width:auto;">
+                        <i class="bi bi-person-plus"></i> Invite
+                    </button>
+                </div>
+                <p id="inviteHint" class="tm-tool-hint">
+                    They need a TraMslate account already. A revisor can open this project, suggest
+                    replacement lines, flag problems and fix timing — but they cannot change your
+                    translation directly, and they cannot delete the project.
+                </p>
+            </form>
+        }
+        else
+        {
+            <p class="tm-tool-hint">Only the project's owner can change who is on it.</p>
+        }
+    </section>
+
+    <section class="tm-card tm-people-card">
+        <h2 class="tm-section-title"><i class="bi bi-journal-text"></i> Revision history</h2>
+
+        @if (!rounds.Any())
+        {
+            <p class="tm-tool-hint">
+                No revision rounds yet. Once a revisor has been invited, send the project
+                over from the editor and their report will appear here.
+            </p>
+        }
+        else
+        {
+            <ul class="tm-round-list">
+                @foreach (var round in rounds)
+                {
+                    <li class="tm-round tm-round-@round.Verdict.ToString().ToLower()">
+                        <div class="tm-round-head">
+                            <span class="tm-round-number">Round @round.Number</span>
+                            <span class="tm-round-verdict">@VerdictLabel(round.Verdict)</span>
+                        </div>
+                        <p class="tm-round-meta">
+                            @(round.Reviewer?.FullName ?? "Revisor")
+                            @if (round.SubmittedAt.HasValue)
+                            {
+                                <text> · @round.SubmittedAt.Value.ToString("MMM dd, yyyy HH:mm")</text>
+                                <text> · @round.SuggestionCount suggestion@(round.SuggestionCount == 1 ? "" : "s")</text>
+                                <text> · @round.FlagCount flagged</text>
+                            }
+                            else
+                            {
+                                <text> · still open, started @round.StartedAt.ToString("MMM dd")</text>
+                            }
+                        </p>
+                        @if (round.SubmittedAt.HasValue)
+                        {
+                            <a asp-action="Report" asp-route-id="@project.Id" asp-route-number="@round.Number"
+                               class="tm-btn-sm">Read the report</a>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+</div>

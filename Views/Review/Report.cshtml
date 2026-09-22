@@ -1,0 +1,105 @@
+@model TraMslate.Models.ReviewRound
+@using TraMslate.Models
+@{
+    var project = (Project)ViewBag.Project;
+    ViewData["Title"] = $"Revision report — {project.Title}";
+
+}
+
+<div class="tm-page-header">
+    <div>
+        <h1 class="tm-page-title">Revision report</h1>
+        <p class="tm-page-sub">
+            @project.Title &nbsp;·&nbsp; @project.SourceLanguage &rarr; @project.TargetLanguage
+            &nbsp;·&nbsp; Round @Model.Number
+        </p>
+    </div>
+    <div class="tm-tool-row" style="width:auto;">
+        <a asp-controller="Review" asp-action="People" asp-route-id="@project.Id" class="tm-btn-sm">
+            <i class="bi bi-people"></i> All rounds
+        </a>
+        <a asp-controller="Project" asp-action="Editor" asp-route-id="@project.Id" class="tm-btn tm-btn-primary" style="width:auto;">
+            <i class="bi bi-pencil-square"></i> Open editor
+        </a>
+    </div>
+</div>
+
+<article class="tm-card tm-report">
+    <header class="tm-report-head">
+        <div>
+            <span class="tm-round-verdict tm-round-verdict-@Model.Verdict.ToString().ToLower()">
+                @(Model.Verdict == ReviewVerdict.Approved ? "Approved" : "Changes requested")
+            </span>
+            <p class="tm-report-meta">
+                @(Model.Reviewer?.FullName ?? "Revisor")
+                @if (Model.SubmittedAt.HasValue)
+                {
+                    <text> · @Model.SubmittedAt.Value.ToString("dd MMM yyyy, HH:mm")</text>
+                }
+            </p>
+        </div>
+        <button class="tm-btn-sm" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>
+    </header>
+
+    <!-- Counts are snapshotted when the round is submitted, so this still
+         describes what the revisor found even after the translator has
+         worked through the suggestions. -->
+    <div class="tm-report-counts">
+        <div><strong>@Model.CueCount.ToString("N0")</strong><span>Lines in the project</span></div>
+        <div><strong>@Model.SuggestionCount.ToString("N0")</strong><span>Suggestions made</span></div>
+        <div><strong>@Model.FlagCount.ToString("N0")</strong><span>Lines flagged</span></div>
+    </div>
+
+    <section class="tm-report-notes">
+        <h2 class="tm-section-title"><i class="bi bi-chat-square-text"></i> The revisor's report</h2>
+        @if (string.IsNullOrWhiteSpace(Model.Notes))
+        {
+            <p class="tm-tool-hint">No written report for this round.</p>
+        }
+        else
+        {
+            <p class="tm-report-body">@Model.Notes</p>
+        }
+    </section>
+
+    @{
+        var flagged = (List<TraMslate.ViewModels.FlaggedLine>)ViewBag.Flagged;
+    }
+    @if (flagged.Any())
+    {
+        <section class="tm-report-flags">
+            <h2 class="tm-section-title"><i class="bi bi-flag"></i> Flagged lines</h2>
+            <p class="tm-tool-hint">
+                These are the lines as they stand now. Open the editor and filter by
+                &ldquo;Flagged by revisor&rdquo; to work through them.
+            </p>
+            <ul class="tm-flag-list">
+                @foreach (var line in flagged)
+                {
+                    <li class="tm-flag-item tm-severity-@line.Severity.ToString().ToLower()">
+                        <div class="tm-flag-head">
+                            <span class="tm-flag-index">#@line.Index</span>
+                            <span class="tm-flag-kind">@line.FlagLabel</span>
+                            @if (line.Severity != ReviewSeverity.None)
+                            {
+                                <span class="tm-flag-severity">@line.Severity</span>
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(line.Note))
+                        {
+                            <p class="tm-flag-note">@line.Note</p>
+                        }
+                        <div class="tm-flag-texts">
+                            <p><span class="tm-flag-label">Source</span> <span dir="auto">@line.OriginalText</span></p>
+                            <p><span class="tm-flag-label">Translation</span> <span dir="auto">@line.TranslatedText</span></p>
+                            @if (!string.IsNullOrWhiteSpace(line.SuggestedText))
+                            {
+                                <p><span class="tm-flag-label tm-flag-label-suggest">Suggested</span> <span dir="auto">@line.SuggestedText</span></p>
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+</article>

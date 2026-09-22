@@ -1,0 +1,319 @@
+/* ══════════════════════════════════════════════════
+   CUE LIST — one panel, compact rows, one open card
+   ══════════════════════════════════════════════════
+   The list reads as a single surface rather than a stack of floating
+   boxes: cues are hairline-separated rows, and only the cue being
+   worked on lifts out of the surface into a full editing card. Loaded
+   after timeline.css so it owns the cue presentation outright. */
+
+.tm-events-list {
+    padding: 0;
+    gap: 0;
+    background: var(--surface);
+}
+
+/* ── Shared row / card geometry ────────────────────
+   The header strip and every compact row share one column template, so
+   the columns line up like a spreadsheet. */
+.tm-cue-grid {
+    display: grid;
+    grid-template-columns:
+        10px                 /* status dot   */
+        2.6rem               /* cue number   */
+        5.4rem               /* in-time      */
+        2.9rem               /* duration     */
+        minmax(0, 1fr)       /* source       */
+        minmax(0, 1fr)       /* translation  */
+        2.6rem;              /* flags        */
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+}
+
+.tm-cue-row {
+    display: grid;
+    grid-template-columns:
+        10px 2.6rem 5.4rem 2.9rem minmax(0, 1fr) minmax(0, 1fr) 2.6rem;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    min-height: 34px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 0.82rem;
+    transition: background 0.12s;
+}
+
+.tm-cue-row:hover        { background: var(--surface2); }
+.tm-cue-row:focus-visible { outline-offset: -3px; }
+
+/* The cue the caret will land on next, when it is not the open one. */
+.tm-cue-row.tm-event-selected {
+    background: var(--surface2);
+    box-shadow: inset 3px 0 0 var(--text-muted);
+}
+
+/* ── Row cells ─────────────────────────────────── */
+.tm-cue-status {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--border);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.tm-cue-status-done    { background: #29c76f; box-shadow: none; }
+.tm-cue-status-warn    { background: var(--warning); box-shadow: none; }
+.tm-cue-status-overlap,
+.tm-cue-status-invalid { background: var(--danger); box-shadow: none; }
+
+.tm-cue-num {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    text-align: right;
+}
+
+.tm-cue-time,
+.tm-cue-dur {
+    font-family: 'Courier New', monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.tm-cue-dur { text-align: right; }
+
+.tm-cue-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    unicode-bidi: plaintext;
+}
+.tm-cue-text-src { color: var(--text-muted); }
+.tm-cue-text-dst { color: var(--text); }
+.tm-cue-text em  { font-style: normal; opacity: 0.35; }
+
+.tm-cue-marks {
+    display: flex;
+    gap: 5px;
+    justify-content: flex-end;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+.tm-cue-marks .bi-chat-left-text-fill { color: var(--warning); }
+
+/* ── The open cue ──────────────────────────────── */
+/* Lifted off the surface so it is unmistakably the one being edited. */
+.tm-cue-item-open {
+    background: var(--surface2) !important;
+    border: 1px solid var(--accent) !important;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin: 6px 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45) !important;
+    scroll-margin: 12px;
+}
+
+.tm-cue-item-open .tm-event-meta { margin-bottom: 8px; }
+.tm-tc-arrow { color: var(--text-muted); font-size: 0.7rem; }
+
+/* Auto-grown by the editor, so no inner scrollbar and no resize grip. */
+.tm-cue-item-open textarea { resize: none; overflow: hidden; }
+
+/* ── Panel action bar ──────────────────────────── */
+.tm-events-header { gap: 6px; }
+.tm-events-title  { font-size: 0.82rem; }
+.tm-events-count  { font-size: 0.72rem; font-weight: 500; color: var(--text-muted); }
+.tm-events-spacer { flex: 1; }
+
+/* ── Column headers share the rows' grid ───────── */
+/* Same template as .tm-cue-row, so each label sits over its column. */
+.tm-cue-headrow {
+    display: grid;
+    grid-template-columns:
+        10px 2.6rem 5.4rem 2.9rem minmax(0, 1fr) minmax(0, 1fr) 2.6rem;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 14px;
+    flex: none;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.tm-col-header-num { text-align: right; }
+.tm-col-header-dur { text-align: right; }
+
+/* ── Swapped columns apply to rows and header alike ── */
+.tm-columns-swapped .tm-cue-text-src,
+.tm-columns-swapped .tm-col-header-original    { grid-column: 6; }
+.tm-columns-swapped .tm-cue-text-dst,
+.tm-columns-swapped .tm-col-header-translation { grid-column: 5; }
+
+/* ── Stacked layout: rows drop the source column ── */
+.tm-cards-stacked .tm-cue-row,
+.tm-cards-stacked .tm-cue-headrow {
+    grid-template-columns: 10px 2.6rem 5.4rem 2.9rem minmax(0, 1fr) 2.6rem;
+}
+.tm-cards-stacked .tm-cue-text-src,
+.tm-cards-stacked .tm-col-header-original { display: none; }
+.tm-cards-stacked .tm-cue-text-dst,
+.tm-cards-stacked .tm-col-header-translation { grid-column: 5; }
+.tm-cards-stacked .tm-cue-marks { grid-column: 6; }
+
+/* ── Narrow panels drop the least load-bearing column first ── */
+@media (max-width: 1250px) {
+    .tm-cue-row,
+    .tm-cue-headrow { grid-template-columns: 10px 2.6rem 5.4rem minmax(0, 1fr) minmax(0, 1fr) 2.6rem; }
+    .tm-cue-dur, .tm-col-header-dur { display: none; }
+    .tm-columns-swapped .tm-cue-text-src,
+    .tm-columns-swapped .tm-col-header-original    { grid-column: 5; }
+    .tm-columns-swapped .tm-cue-text-dst,
+    .tm-columns-swapped .tm-col-header-translation { grid-column: 4; }
+}
+
+/* ── Open-card labels ──────────────────────────── */
+/* The translation label carries the character counter on its right. */
+.tm-col-label-translation {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+/* ── Empty state ───────────────────────────────── */
+.tm-empty-state {
+    padding: 28px 22px;
+    color: var(--text-muted);
+    font-size: 0.86rem;
+    text-align: center;
+}
+
+/* ── Workflow status ───────────────────────────── */
+/* The translator's own marking. Kept visually quieter than the status dot,
+   which reports the automatic checks, so the two never compete. */
+.tm-cue-flag   { font-size: 0.7rem; }
+.tm-cue-flag-1 { color: #29c76f; }
+.tm-cue-flag-2 { color: var(--warning); }
+.tm-cue-flag-3 { color: #4da3ff; }
+
+.tm-cue-status-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    padding: 2px 4px;
+    outline: none;
+    max-width: 7.5rem;
+}
+.tm-cue-status-select-1 { color: #29c76f; border-color: rgba(41, 199, 111, 0.45); }
+.tm-cue-status-select-2 { color: var(--warning); border-color: rgba(255, 179, 0, 0.45); }
+.tm-cue-status-select-3 { color: #4da3ff; border-color: rgba(77, 163, 255, 0.45); }
+
+/* ── Banner: recovery, conflicts, warnings ─────── */
+.tm-banner {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 18px;
+    font-size: 0.82rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+}
+.tm-banner-text  { flex: 1; min-width: 0; line-height: 1.5; }
+.tm-banner-close { margin-left: 4px; }
+
+.tm-banner-warn {
+    background: rgba(255, 179, 0, 0.12);
+    border-bottom-color: rgba(255, 179, 0, 0.4);
+}
+.tm-banner-danger {
+    background: rgba(255, 51, 85, 0.14);
+    border-bottom-color: rgba(255, 51, 85, 0.45);
+}
+.tm-banner-info {
+    background: rgba(77, 163, 255, 0.12);
+    border-bottom-color: rgba(77, 163, 255, 0.4);
+}
+
+/* ── Focus inside the open card ────────────────── */
+/* The global focus ring is deliberately loud for keyboard navigation, but on
+   the box a translator types in all day it sits over the label and fights the
+   card's own border. Inside the card the surrounding column carries the focus
+   signal instead — a solid accent border plus a soft glow, which is at least
+   as visible and far calmer. */
+.tm-cue-item-open textarea:focus,
+.tm-cue-item-open textarea:focus-visible {
+    outline: none;
+}
+
+.tm-event-col-translation:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(226, 0, 26, 0.22);
+}
+
+.tm-event-col-original:focus-within {
+    border-color: var(--text-muted);
+    box-shadow: 0 0 0 3px rgba(154, 154, 165, 0.16);
+}
+
+/* The open card is already lifted and bordered; at full accent strength it
+   competes with the focused column inside it. */
+.tm-cue-item-open {
+    border-color: rgba(226, 0, 26, 0.55) !important;
+}
+
+/* Timecode fields and the status control keep a visible ring, tightened so it
+   does not overlap the labels above them. */
+.tm-cue-item-open input:focus-visible,
+.tm-cue-item-open select:focus-visible,
+.tm-cue-item-open button:focus-visible {
+    outline: 2px solid var(--success);
+    outline-offset: 1px;
+}
+
+/* ── Column labels ─────────────────────────────── */
+.tm-col-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.tm-col-label-translation { color: var(--accent); }
+
+/* ── Delivery spec panel ───────────────────────── */
+.tm-spec-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 12px;
+    margin-top: 10px;
+}
+.tm-spec-grid label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.tm-spec-grid input {
+    width: 5rem;
+    flex: none;
+    padding: 4px 6px;
+    font-size: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+}
+.tm-spec-tools > summary { color: var(--text); }

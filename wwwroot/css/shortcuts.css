@@ -1,0 +1,151 @@
+/* ── Keyboard Shortcuts settings page ────────────── */
+.tm-shortcuts-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    position: sticky;
+    top: -32px;
+    background: var(--bg);
+    padding: 32px 0 16px;
+    z-index: 20;
+}
+
+.tm-shortcuts-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.tm-shortcuts-dirty {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--warning);
+    background: rgba(255,179,0,0.1);
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+
+.tm-shortcuts-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 24px;
+}
+
+.tm-shortcuts-search i { color: var(--text-muted); }
+
+.tm-shortcuts-search input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: 'Inter', sans-serif;
+}
+
+.tm-shortcuts-category { margin-bottom: 28px; }
+
+.tm-shortcuts-category-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.tm-shortcuts-category-title i { color: var(--accent); }
+
+.tm-shortcuts-list {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.tm-shortcut-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+}
+
+.tm-shortcut-row:last-child { border-bottom: none; }
+
+.tm-shortcut-info { flex: 1; min-width: 0; }
+
+.tm-shortcut-label { font-size: 0.9rem; font-weight: 600; color: var(--text); }
+.tm-shortcut-desc { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+
+.tm-shortcut-changed {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--warning);
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.tm-shortcut-combo {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    min-width: 150px;
+    flex-shrink: 0;
+}
+
+.tm-shortcut-combo kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 0.75rem;
+    color: var(--text);
+}
+
+.tm-shortcut-combo-empty { font-size: 0.78rem; color: var(--text-muted); font-style: italic; }
+
+.tm-shortcut-recording {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    padding: 3px 10px;
+    border: 1px dashed var(--accent);
+    border-radius: 6px;
+    background: rgba(226,0,26,0.08);
+    animation: tm-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes tm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+.tm-shortcut-row-buttons { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+.tm-shortcut-conflict {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: rgba(255,51,85,0.1);
+    border: 1px solid rgba(255,51,85,0.35);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.8rem;
+    color: #ff8fa3;
+    margin: 8px 18px 14px;
+}
+
+.tm-shortcut-conflict strong { color: var(--text); }
+
+.tm-shortcuts-empty {
+    text-align: center;
+    padding: 48px 20px;
+    color: var(--text-muted);
+}

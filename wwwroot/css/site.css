@@ -1,0 +1,1205 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --bg:        #0a0a0c;
+    --surface:   #141417;
+    --surface2:  #1e1e23;
+    --accent:    #e2001a;
+    --accent-h:  #b4001a;
+    --text:      #f7f7f8;
+    --text-muted:#9a9aa5;
+    --border:    #2c2c33;
+    --success:   #ffd400;
+    --warning:   #ffb300;
+    --danger:    #ff3355;
+    --sidebar-w: 220px;
+    --nav-h:     52px;
+    --timeline-h:150px;
+    --cue-text-h:56px;
+}
+/* Firefox */
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a40 #0a0a0c;
+}
+
+/* Chrome, Edge and Safari */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0c;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #4a4a52, #232327);
+  border: 2px solid #0a0a0c;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--accent), #6a0010);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+}
+
+::-webkit-scrollbar-corner {
+  background: #0a0a0c;
+}
+/* ── Top Nav ─────────────────────────────────────── */
+.tm-topnav {
+    height: 52px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.tm-topnav-left {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+}
+
+.tm-topnav-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.tm-logo {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.5px;
+    white-space: nowrap;
+}
+
+.tm-logo span { color: var(--accent); }
+
+.tm-topnav-links {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.tm-topnav-links a {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 7px;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 500;
+    transition: all 0.15s;
+}
+
+.tm-topnav-links a:hover { background: var(--surface2); color: var(--text); }
+.tm-topnav-links a.active { background: var(--surface2); color: var(--accent); }
+
+.tm-nav-user {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tm-nav-logout {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 7px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: all 0.15s;
+}
+
+.tm-nav-logout:hover { background: var(--surface2); color: var(--danger); }
+
+
+body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+}
+
+
+
+/* ── Main content ────────────────────────────────── */
+/* ── Main content ────────────────────────────────── */
+.tm-main {
+    padding: 32px 40px;
+    flex: 1;
+    min-height: calc(100vh - 52px);
+}
+
+/* ── Auth pages ──────────────────────────────────── */
+.tm-auth-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: var(--bg);
+}
+
+.tm-auth-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    width: 100%;
+    max-width: 420px;
+}
+
+.tm-auth-card .tm-logo {
+    text-align: center;
+    font-size: 1.8rem;
+    margin-bottom: 8px;
+}
+
+.tm-auth-card .tm-subtitle {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 32px;
+}
+
+/* ── Form controls ───────────────────────────────── */
+.tm-form-group { margin-bottom: 18px; }
+
+.tm-form-group label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.tm-form-group input, .tm-form-group select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: 'Inter', sans-serif;
+    transition: border-color 0.15s;
+    outline: none;
+}
+
+.tm-form-group input:focus, .tm-form-group select:focus {
+    border-color: var(--accent);
+}
+
+.tm-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 11px 20px;
+    border-radius: 8px;
+    border: none;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-decoration: none;
+}
+
+.tm-btn-primary { background: var(--accent); color: #fff; width: 100%; }
+.tm-btn-primary:hover { background: var(--accent-h); color: #fff; }
+
+.tm-auth-footer {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.tm-auth-footer a { color: var(--accent); text-decoration: none; }
+.tm-auth-footer a:hover { text-decoration: underline; }
+
+.tm-alert-danger {
+    background: rgba(255,51,85,0.12);
+    border: 1px solid rgba(255,51,85,0.35);
+    color: #ff8fa3;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+}
+
+/* ── Dashboard ───────────────────────────────────── */
+.tm-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 32px;
+}
+
+.tm-page-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+
+.tm-page-sub {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.tm-empty-state {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-muted);
+}
+
+.tm-empty-state i {
+    font-size: 3rem;
+    margin-bottom: 16px;
+    display: block;
+    color: var(--border);
+}
+
+.tm-empty-state h3 {
+    font-size: 1.1rem;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.tm-projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+.tm-project-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    transition: border-color 0.15s;
+}
+
+.tm-project-card:hover { border-color: var(--accent); }
+
+.tm-project-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.tm-project-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+
+.tm-project-langs {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.tm-project-desc {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 8px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.tm-project-date { font-size: 0.78rem; color: var(--text-muted); }
+
+.tm-status {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.tm-status-inprogress { background: rgba(226,0,26,0.15); color: var(--accent); }
+.tm-status-completed  { background: rgba(255,212,0,0.15); color: var(--success); }
+.tm-status-underreview{ background: rgba(255,179,0,0.15); color: var(--warning); }
+
+/* ── Cards ───────────────────────────────────────── */
+.tm-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+}
+
+/* ── File drop ───────────────────────────────────── */
+.tm-file-drop {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+}
+
+.tm-file-drop:hover, .tm-file-drop--over {
+    border-color: var(--accent);
+    background: rgba(226,0,26,0.06);
+}
+
+.tm-file-drop i {
+    font-size: 2rem;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: 8px;
+}
+
+.tm-file-drop p {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.tm-file-drop p span { color: var(--accent); }
+
+.tm-file-hint { font-size: 0.78rem !important; margin-top: 4px !important; }
+
+.tm-file-drop input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+}
+
+.tm-editor-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.tm-editor-topbar-left { display: flex; align-items: center; gap: 12px; }
+.tm-editor-topbar-right { display: flex; align-items: center; gap: 8px; }
+
+.tm-editor-title { font-weight: 600; font-size: 0.95rem; }
+.tm-editor-langs { font-size: 0.78rem; color: var(--text-muted); }
+
+/* ── Left panel ──────────────────────────────────── */
+.tm-editor-left {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.tm-video-wrap {
+    flex: 1;
+    background: #000;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.tm-video-wrap video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.tm-no-video {
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.tm-no-video i { font-size: 3rem; display: block; margin-bottom: 8px; }
+
+.tm-subtitle-overlay {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.75);
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 500;
+    padding: 6px 16px;
+    border-radius: 6px;
+    text-align: center;
+    max-width: 80%;
+    pointer-events: none;
+    white-space: pre-wrap;
+}
+
+
+
+/* ── Playback controls ───────────────────────────── */
+.tm-playback-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.tm-timecode {
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: var(--accent);
+    background: var(--surface2);
+    padding: 4px 10px;
+    border-radius: 6px;
+    letter-spacing: 1px;
+}
+
+.tm-speed-select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 3px 6px;
+    font-size: 0.8rem;
+    outline: none;
+}
+
+/* ── Right panel: header · tools · cue list ─────────────────── */
+.tm-editor-right {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+.tm-events-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 0.9rem;
+    background: var(--surface);
+    flex-shrink: 0;
+}
+
+/* The cue list is the only scrolling part of the panel. flex-basis 0 ties
+   its height to the space left over rather than to how many cues it holds,
+   so it always stops exactly where the timeline begins. */
+.tm-events-list {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.tm-events-list > * { flex: none; }
+
+/* Capped so opening “More tools” scrolls within the tools strip instead of
+   squeezing the cue list. */
+.tm-workspace-tools {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 46%;
+    overflow-y: auto;
+}
+
+/* ── Event cards ─────────────────────────────────── */
+.tm-event-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.tm-event-card:hover { border-color: var(--accent); }
+.tm-event-active { border-color: var(--accent) !important; background: var(--surface2); }
+
+.tm-event-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.tm-event-index {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    min-width: 24px;
+}
+
+.tm-event-times { display: flex; align-items: center; gap: 4px; flex: 1; }
+
+.tm-tc-input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    font-size: 0.72rem;
+    padding: 3px 6px;
+    width: 108px;
+    outline: none;
+}
+
+.tm-tc-input:focus { border-color: var(--accent); }
+
+.tm-reading-speed {
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-left: auto;
+}
+
+.tm-event-body { display: flex; flex-direction: column; gap: 6px; }
+
+.tm-original-input {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding: 4px 0;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    width: 100%;
+}
+
+.tm-translated-input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.88rem;
+    padding: 6px 10px;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    resize: vertical;
+    min-height: 56px;
+    width: 100%;
+    transition: border-color 0.15s;
+}
+
+.tm-translated-input:focus { border-color: var(--accent); }
+
+/* ── Buttons ─────────────────────────────────────── */
+.tm-icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 6px 8px;
+    border-radius: 6px;
+    transition: all 0.15s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+}
+
+.tm-icon-btn:hover { background: var(--surface2); color: var(--text); }
+
+.tm-icon-btn-sm {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 5px;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+}
+
+.tm-delete-btn:hover { color: var(--danger); }
+
+.tm-btn-sm {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: all 0.15s;
+}
+
+.tm-btn-sm:hover { color: var(--text); border-color: var(--text-muted); }
+.tm-btn-sm-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tm-btn-sm-primary:hover { background: var(--accent-h); border-color: var(--accent-h); color: #fff; }
+
+
+/* ── Save status ─────────────────────────────────── */
+.tm-save-status {
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+.tm-save-ok      { color: var(--success); background: rgba(34,197,94,0.1); }
+.tm-save-unsaved { color: var(--warning); background: rgba(245,158,11,0.1); }
+.tm-save-saving  { color: var(--text-muted); background: var(--surface2); }
+.tm-save-error   { color: var(--danger); background: rgba(239,68,68,0.1); }
+
+/* ── Timeline blocks ─────────────────────────────── */
+.tm-timeline-events {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 60%;
+    pointer-events: all;
+}
+
+/* .tm-timeline-block {
+    position: absolute;
+    top: 4px;
+    height: calc(100% - 8px);
+    background: rgba(241, 241, 245, 0.35);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s;
+    min-width: 3px;
+} */
+
+.tm-timeline-block:hover        { background: rgba(226,0,26,0.55); }
+.tm-timeline-block-active       { background: rgba(226,0,26,0.7) !important; border-color: #fff; }
+
+/* ── Event card ──────────────────────────────────── */
+.tm-event-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.tm-event-times {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+}
+
+.tm-tc-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.tm-tc-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+.tm-cps-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* ── Side by side columns ────────────────────────── */
+.tm-event-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.tm-event-col { display: flex; flex-direction: column; }
+
+.tm-original-input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    padding: 6px 8px;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    resize: vertical;
+    min-height: 56px;
+    transition: border-color 0.15s;
+}
+
+.tm-original-input:focus { border-color: var(--text-muted); color: var(--text); }
+
+.tm-events-header-cols {
+    display: flex;
+    flex: 1;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+/* ── Shortcut hints ──────────────────────────────── */
+.tm-shortcut-hints {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.tm-shortcut-hints span {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.7rem;
+    font-family: 'Inter', sans-serif;
+    color: var(--text);
+}
+
+/* ── Mark buttons ────────────────────────────────── */
+.tm-mark-btn {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    transition: all 0.15s;
+}
+
+.tm-mark-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ── Column labels ───────────────────────────────── */
+.tm-col-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+.tm-col-label-translation {
+    color: var(--accent);
+}
+
+/* ── Duration badge ──────────────────────────────── */
+.tm-duration-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 7px;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+/* ── Original text — visually locked ─────────────── */
+.tm-original-input {
+    width: 100%;
+    background: rgba(255,255,255,0.03);
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    padding: 6px 8px;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    resize: vertical;
+    min-height: 60px;
+    transition: border-color 0.15s;
+    cursor: text;
+}
+
+.tm-original-input:focus {
+    border-color: var(--text-muted);
+    color: var(--text);
+    background: var(--surface2);
+}
+
+/* ── Translation — highlighted ───────────────────── */
+.tm-translated-input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.88rem;
+    padding: 6px 10px;
+    outline: none;
+    font-family: 'Inter', sans-serif;
+    resize: vertical;
+    min-height: 60px;
+    width: 100%;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.tm-translated-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(226,0,26,0.18);
+}
+
+/* ── Resize handle ───────────────────────────────── */
+.tm-resize-handle {
+    width: 6px;
+    background: var(--border);
+    cursor: col-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s;
+    position: relative;
+    z-index: 10;
+}
+
+.tm-resize-handle:hover,
+.tm-resize-handle.tm-resizing {
+    background: var(--accent);
+}
+
+.tm-resize-grip {
+    width: 2px;
+    height: 40px;
+    background: var(--text-muted);
+    border-radius: 2px;
+    opacity: 0.5;
+}
+
+.tm-resize-handle:hover .tm-resize-grip,
+.tm-resize-handle.tm-resizing .tm-resize-grip {
+    opacity: 1;
+    background: #fff;
+}
+
+/* ── Video broadcast overlays ────────────────────── */
+.tm-vid-overlay-tl,
+.tm-vid-overlay-tr {
+    position: absolute;
+    top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.tm-vid-overlay-tl { left: 12px; }
+.tm-vid-overlay-tr { right: 12px; align-items: flex-end; }
+
+.tm-vid-label {
+    font-family: 'Courier New', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--success);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+    letter-spacing: 0.5px;
+    line-height: 1.4;
+}
+
+/* ── Watermark ───────────────────────────────────── */
+.tm-vid-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: 'Inter', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--success);
+    text-transform: uppercase;
+    letter-spacing: 6px;
+    pointer-events: none;
+    z-index: 10;
+    white-space: nowrap;
+    text-shadow: 0 0 12px rgba(0,0,0,1), 0 0 4px rgba(0,0,0,1);
+    user-select: none;
+    border: 1px solid var(--success);
+    padding: 4px 14px;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.35);
+}
+
+/* ── Delete confirmation modal ───────────────────── */
+.tm-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+}
+
+.tm-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+}
+
+.tm-modal-icon {
+    font-size: 2.5rem;
+    color: var(--danger);
+    margin-bottom: 16px;
+}
+
+.tm-modal-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.tm-modal-msg {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    line-height: 1.5;
+}
+
+.tm-modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.tm-delete-project-btn {
+    padding: 8px 12px !important;
+    color: var(--text-muted) !important;
+}
+
+.tm-delete-project-btn:hover {
+    color: var(--danger) !important;
+    border-color: var(--danger) !important;
+}
+
+
+/* ── Full width timeline ─────────────────────────── */
+.tm-timeline-resize-handle {
+    height: 6px;
+    background: var(--border);
+    cursor: row-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s;
+    z-index: 10;
+}
+
+.tm-timeline-resize-handle:hover,
+.tm-timeline-resize-handle.tm-resizing {
+    background: var(--accent);
+}
+
+.tm-timeline-resize-grip {
+    width: 40px;
+    height: 2px;
+    background: var(--text-muted);
+    border-radius: 2px;
+    opacity: 0.5;
+}
+
+.tm-timeline-resize-handle:hover .tm-timeline-resize-grip,
+.tm-timeline-resize-handle.tm-resizing .tm-timeline-resize-grip {
+    opacity: 1;
+    background: #fff;
+}
+
+.tm-timeline-wrap {
+    height: var(--timeline-h);
+    background: var(--surface2);
+    border-top: 1px solid var(--border);
+    position: relative;
+    cursor: pointer;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+/* Size comes from the width/height attributes the editor sets to the
+   visible strip; see #waveformCanvas in timeline.css for why. Giving it a
+   percentage size here would stretch one viewport-sized bitmap across the
+   entire track. */
+#waveformCanvas { display: block; }
+
+.tm-timeline-cursor {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 2px;
+    background: var(--accent);
+    pointer-events: none;
+    left: 0;
+    box-shadow: 0 0 6px var(--accent);
+    z-index: 5;
+}
+
+.tm-timeline-timecodes {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 18px;
+    pointer-events: none;
+    z-index: 4;
+}
+
+/* ════════════════════════════════════════════════
+   EDITOR SHELL — the single authoritative layout
+   ════════════════════════════════════════════════
+   The shell is pinned to the viewport rather than flowing inside
+   .tm-main, so no ancestor padding or margin can push its bottom edge
+   past the screen. Stacking order, top to bottom: topbar · body ·
+   timeline (resize handle + toolbar + waveform).
+
+   Only .tm-editor-body may grow or shrink. Everything from the timeline
+   handle down is flex:none, so the timeline always sits *below* the cue
+   list and can never overlap it — at any window height. */
+.tm-editor-wrap {
+    position: fixed;
+    top: var(--nav-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    margin: 0;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+/* min-height:0 lets this row shrink below its content height, so the
+   panels inside it scroll instead of overflowing the shell. */
+.tm-editor-body {
+    display: flex;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.tm-timeline-resize-handle,
+.tm-timeline-toolbar,
+.tm-timeline-wrap { flex: none; }
+
+/* ── Char counter ────────────────────────────────── */
+.tm-char-counter {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    font-family: 'Courier New', monospace;
+}
+
+/* ── Input states ────────────────────────────────── */
+.tm-translated-input.tm-input-warning {
+    border-color: var(--warning) !important;
+}
+
+.tm-translated-input.tm-input-error {
+    border-color: var(--danger) !important;
+    box-shadow: 0 0 0 3px rgba(239,68,68,0.15);
+}
+/* ══════════════════════════════════════════════════
+   SHORT-SCREEN VERTICAL BUDGET
+   ══════════════════════════════════════════════════
+   A cue card must always fit inside the cue list, otherwise pressing
+   "next cue" lands on a card whose bottom half is clipped. The fixed
+   furniture above and below the list (topbar, list header, timeline)
+   therefore shrinks as the window gets shorter, and the cue text boxes
+   shrink with it. Laptop screens at 768px tall spend most of their
+   height on browser chrome, so these thresholds are deliberately
+   generous. */
+@media (max-height: 860px) {
+    :root { --timeline-h: 128px; --cue-text-h: 52px; }
+}
+@media (max-height: 740px) {
+    :root { --timeline-h: 110px; --cue-text-h: 46px; }
+    .tm-events-header { padding: 8px 14px; }
+    .tm-timeline-toolbar { padding: 4px 12px; }
+}
+@media (max-height: 640px) {
+    :root { --timeline-h: 92px; --cue-text-h: 40px; }
+    .tm-editor-topbar { padding: 6px 16px; }
+    .tm-event-col { padding: 7px 10px; }
+    .tm-event-columns { gap: 8px; }
+}
+@media (max-height: 540px) {
+    :root { --timeline-h: 78px; --cue-text-h: 34px; }
+    .tm-editor-langs { display: none; }
+    .tm-event-col { padding: 5px 8px; }
+}
+
+/* The video may shrink to nothing before the cue list does — the list is
+   where the work happens, so it keeps a floor of roughly one full card. */
+.tm-editor-left { min-height: 0; }
+.tm-video-wrap  { min-height: 0; }

@@ -1,0 +1,67 @@
+@model TraMslate.ViewModels.RegisterViewModel
+@{ ViewData["Title"] = "Register"; Layout = "~/Views/Shared/_Layout.cshtml"; }
+
+<div class="tm-auth-card">
+    <div class="tm-logo">Tra<span>M</span>slate</div>
+    <p class="tm-subtitle">Create your translator account</p>
+
+    @if (!ViewData.ModelState.IsValid)
+    {
+        <div class="tm-alert-danger">
+            @Html.ValidationSummary(true)
+        </div>
+    }
+
+    <form asp-action="Register" method="post">
+        @Html.AntiForgeryToken()
+
+        <div class="tm-form-group">
+            <label asp-for="FullName">Full Name</label>
+            <input asp-for="FullName" type="text" placeholder="Jane Doe" />
+            <span asp-validation-for="FullName" class="text-danger" style="font-size:0.8rem"></span>
+        </div>
+
+        <div class="tm-form-group">
+            <label asp-for="Email">Email</label>
+            <input asp-for="Email" type="email" placeholder="you@example.com" />
+            <span asp-validation-for="Email" class="text-danger" style="font-size:0.8rem"></span>
+        </div>
+
+        <div class="tm-form-group">
+            <label asp-for="LanguageSpecialty">Language Specialty</label>
+            <select asp-for="LanguageSpecialty">
+                <option value="">— Select a language —</option>
+                <option>Arabic</option>
+                <option>French</option>
+                <option>Spanish</option>
+                <option>German</option>
+                <option>Italian</option>
+                <option>Portuguese</option>
+                <option>Turkish</option>
+                <option>Persian</option>
+                <option>Hebrew</option>
+                <option>Other</option>
+            </select>
+        </div>
+
+        <div class="tm-form-group">
+            <label asp-for="Password">Password</label>
+            <input asp-for="Password" type="password" placeholder="Min. 8 characters" />
+            <span asp-validation-for="Password" class="text-danger" style="font-size:0.8rem"></span>
+        </div>
+
+        <div class="tm-form-group">
+            <label asp-for="ConfirmPassword">Confirm Password</label>
+            <input asp-for="ConfirmPassword" type="password" placeholder="••••••••" />
+            <span asp-validation-for="ConfirmPassword" class="text-danger" style="font-size:0.8rem"></span>
+        </div>
+
+        <button type="submit" class="tm-btn tm-btn-primary">
+            <i class="bi bi-person-plus"></i> Create Account
+        </button>
+    </form>
+
+    <div class="tm-auth-footer">
+        Already have an account? <a asp-action="Login">Sign in</a>
+    </div>
+</div>

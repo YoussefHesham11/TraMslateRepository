@@ -1,0 +1,119 @@
+/* Shared workspace polish; keep the original component styles as the base. */
+:root { --bg:#0a0a0c; --surface:#141417; --surface2:#1e1e23; --border:#2c2c33; --accent:#e2001a; --accent-h:#b4001a; --text:#f7f7f8; --text-muted:#9a9aa5; }
+body { background:radial-gradient(ellipse at top left, #250006 0, transparent 50%), var(--bg); }
+button, input, select, textarea { font:inherit; }
+button:disabled { opacity:.45; cursor:not-allowed; }
+:focus-visible { outline:3px solid var(--success); outline-offset:3px; }
+.tm-btn-primary, .tm-btn-sm-primary { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:700; }
+.tm-btn-primary:hover, .tm-btn-sm-primary:hover { background:var(--accent-h); border-color:var(--accent-h); }
+.tm-topnav { background:rgba(10,10,12,.97); }
+.tm-main { max-width:100%; margin:auto; }
+.tm-page-title { letter-spacing:-1px; }
+.tm-page-sub { line-height:1.7; }
+.tm-card, .tm-auth-card, .tm-project-card { border:1px solid var(--border); border-radius:18px; box-shadow:0 12px 40px #0002; }
+.tm-project-card { transition:transform .18s, border-color .18s; }
+.tm-project-card:hover { transform:translateY(-3px); border-color:var(--accent); }
+.tm-project-title { overflow-wrap:anywhere; }
+.tm-project-desc { line-height:1.7; }
+.tm-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:0 0 26px; }
+.tm-stat { padding:20px 24px; background:linear-gradient(135deg,var(--surface2),var(--surface)); border:1px solid var(--border); border-radius:16px; }
+.tm-stat strong { display:block; font-size:1.9rem; letter-spacing:-1px; }
+.tm-stat span { font-size:.85rem; color:var(--text-muted); }
+.tm-dashboard-tools, .tm-tool-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.tm-dashboard-tools { margin-bottom:24px; }
+.tm-dashboard-tools input, .tm-tool-row input, .tm-tool-row select, .tm-dashboard-tools select { min-width:0; padding:9px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); }
+.tm-dashboard-tools input, .tm-tool-row input { flex:1; }
+.tm-dashboard-tools input { max-width:480px; }
+.tm-editor-topbar { padding:14px 20px; gap:14px; flex-wrap:wrap; }
+.tm-editor-topbar-right { flex-wrap:wrap; }
+.tm-editor-title { font-size:1.05rem; overflow-wrap:anywhere; }
+.tm-editor-langs { margin-top:4px; }
+.tm-editor-right { min-width:0; flex:1.25; }
+.tm-workspace-tools { padding:14px 16px; background:var(--surface); border-bottom:1px solid var(--border); display:grid; gap:10px; }
+.tm-progress-summary { display:flex; justify-content:space-between; gap:8px; font-size:.78rem; color:var(--text-muted); }
+.tm-progress-summary strong { color:var(--text); }
+progress { width:100%; height:5px; border:0; border-radius:10px; accent-color:var(--accent); }
+progress::-webkit-progress-bar { background:var(--surface2); border-radius:10px; }
+progress::-webkit-progress-value { background:var(--accent); border-radius:10px; }
+.tm-tool-row { font-size:.8rem; }
+.tm-tool-row input { width:130px; }
+.tm-workspace-tools summary { cursor:pointer; font-size:.78rem; color:var(--text-muted); }
+.tm-workspace-tools details[open] .tm-tool-row { margin-top:10px; }
+.tm-tool-hint { margin:10px 0 0; color:var(--text-muted); font-size:.72rem; line-height:1.8; }
+.tm-tool-icons { gap:2px; }
+.tm-tool-icons .tm-icon-btn-sm { font-size:1rem; padding:6px 8px; }
+.tm-tool-icons .tm-icon-btn-sm:hover:not(:disabled) { background:var(--surface2); color:var(--text); }
+.tm-tool-icons .tm-icon-btn-sm:disabled { opacity:.35; cursor:not-allowed; }
+.tm-tool-sep { width:1px; height:20px; background:var(--border); margin:0 4px; }
+.tm-more-tools > summary { display:inline-flex; align-items:center; gap:6px; }
+.tm-event-card { border-radius:12px; }
+.tm-event-active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+/* Height follows the short-screen budget in site.css; the JS auto-grow
+   (see autoGrow in editor.js) expands a box that needs more than two lines. */
+.tm-original-input, .tm-translated-input { line-height:1.7; min-height:var(--cue-text-h); font-size:.95rem; }
+.tm-quality-hint { color:var(--warning); font-size:.72rem; padding:0 12px 8px; margin:0; }
+.tm-quality-hint:empty { display:none; }
+.tm-subtitle-overlay { white-space:pre-line; unicode-bidi:plaintext; }
+.tm-vid-watermark { display:none; }
+.tm-empty-state { line-height:1.8; }
+.validation-summary-valid { display:none; }
+[hidden] { display:none !important; }
+@media (max-width:1100px) {
+    .tm-editor-topbar-right { gap:5px; }
+    .tm-event-meta, .tm-event-times { flex-wrap:wrap; }
+    .tm-nav-user { display:none; }
+}
+@media (max-width:900px) {
+    .tm-topnav { height:auto; min-height:52px; padding:10px 14px; gap:12px; flex-wrap:wrap; }
+    .tm-topnav-left { gap:12px; }
+    .tm-main { padding:24px 16px; }
+    .tm-editor-wrap { position:static; inset:auto; height:auto; min-height:calc(100dvh - 72px); margin:-24px -16px 0; overflow:visible; }
+    .tm-editor-body { flex-direction:column; overflow:visible; }
+    .tm-editor-left, .tm-editor-right { width:100% !important; flex:auto !important; overflow:visible; }
+    .tm-video-wrap { flex:none; aspect-ratio:16/9; max-height:50vh; }
+    .tm-events-list { max-height:none; overflow:visible; }
+    .tm-resize-handle, .tm-timeline-resize-handle { display:none; }
+    .tm-timeline-wrap { flex:none; height:100px; }
+    .tm-editor-topbar { padding:14px; }
+}
+@media (max-width:560px) {
+    .tm-event-columns { grid-template-columns:1fr; }
+    .tm-event-col { width:100%; }
+    .tm-page-header { align-items:flex-start; gap:16px; flex-wrap:wrap; }
+    .tm-stats { gap:8px; }
+    .tm-stat { padding:14px 12px; }
+    .tm-stat strong { font-size:1.5rem; }
+    .tm-progress-summary { flex-wrap:wrap; }
+    .tm-topnav-links a { padding:6px; font-size:.78rem; }
+    .tm-tool-row { gap:6px; }
+}
+@media (prefers-reduced-motion:reduce) { *, *::before, *::after { scroll-behavior:auto !important; transition:none !important; animation:none !important; } }
+
+/* ── Dashboard project cards ─────────────────────── */
+.tm-projects-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:18px; align-items:start; }
+.tm-project-card { display:flex; flex-direction:column; gap:10px; padding:20px 22px; }
+.tm-project-card-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.tm-project-date { display:inline-flex; align-items:center; gap:5px; font-size:.74rem; color:var(--text-muted); white-space:nowrap; }
+.tm-project-langs { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:.82rem; color:var(--text-muted); margin:0; }
+.tm-project-novideo { display:inline-flex; align-items:center; gap:4px; font-size:.72rem; color:var(--text-muted); opacity:.8; }
+.tm-project-desc { margin:0; font-size:.84rem; color:var(--text-muted); }
+
+/* Progress is the first thing a translator looks for, so it gets real estate
+   of its own rather than being implied by the status chip. */
+.tm-project-progress { margin-top:2px; }
+.tm-project-progress-label { display:flex; align-items:baseline; justify-content:space-between; gap:10px; font-size:.78rem; color:var(--text-muted); margin:0 0 6px; }
+.tm-project-progress-label strong { color:var(--text); font-size:.9rem; }
+.tm-project-percent { font-variant-numeric:tabular-nums; font-weight:600; color:var(--text); }
+.tm-project-percent-done { color:#29c76f; }
+.tm-project-empty { display:flex; align-items:center; gap:6px; font-style:normal; opacity:.75; }
+
+.tm-progress-track { height:6px; border-radius:999px; background:var(--surface2); overflow:hidden; }
+.tm-progress-fill { height:100%; border-radius:999px; background:linear-gradient(90deg, var(--accent), #ff5a6e); transition:width .3s; }
+.tm-progress-fill-done { background:linear-gradient(90deg, #1f9e57, #29c76f); }
+
+.tm-project-flags { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 0; font-size:.74rem; }
+.tm-flag-review   { display:inline-flex; align-items:center; gap:4px; color:var(--warning); }
+.tm-flag-approved { display:inline-flex; align-items:center; gap:4px; color:#4da3ff; }
+
+.tm-project-actions { display:flex; gap:8px; margin-top:auto; padding-top:12px; }
+.tm-project-actions .tm-btn { width:auto; font-size:.85rem; padding:8px 16px; }

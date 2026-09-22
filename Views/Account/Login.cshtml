@@ -1,0 +1,43 @@
+@model TraMslate.ViewModels.LoginViewModel
+@{ ViewData["Title"] = "Login"; Layout = "~/Views/Shared/_Layout.cshtml"; }
+
+<div class="tm-auth-card">
+    <div class="tm-logo">Tra<span>M</span>slate</div>
+    <p class="tm-subtitle">Sign in to your workspace</p>
+
+    @if (!ViewData.ModelState.IsValid)
+    {
+        <div class="tm-alert-danger">
+            @Html.ValidationSummary(true)
+        </div>
+    }
+
+    <form asp-action="Login" method="post">
+        @Html.AntiForgeryToken()
+
+        <div class="tm-form-group">
+            <label asp-for="Email">Email</label>
+            <input asp-for="Email" type="email" placeholder="you@example.com" autocomplete="email" />
+            <span asp-validation-for="Email" class="text-danger" style="font-size:0.8rem"></span>
+        </div>
+
+        <div class="tm-form-group">
+            <label asp-for="Password">Password</label>
+            <input asp-for="Password" type="password" placeholder="••••••••" autocomplete="current-password" />
+            <span asp-validation-for="Password" class="text-danger" style="font-size:0.8rem"></span>
+        </div>
+
+        <div class="tm-form-group" style="display:flex; align-items:center; gap:8px;">
+            <input asp-for="RememberMe" type="checkbox" style="width:auto;" />
+            <label asp-for="RememberMe" style="margin:0; cursor:pointer;">Remember me</label>
+        </div>
+
+        <button type="submit" class="tm-btn tm-btn-primary">
+            <i class="bi bi-box-arrow-in-right"></i> Sign In
+        </button>
+    </form>
+
+    <div class="tm-auth-footer">
+        Don't have an account? <a asp-action="Register">Create one</a>
+    </div>
+</div>

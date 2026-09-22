@@ -1,0 +1,160 @@
+@model TraMslate.ViewModels.DashboardViewModel
+@using TraMslate.Models
+@{ ViewData["Title"] = "Dashboard"; }
+
+<div class="tm-page-header">
+    <div>
+        <h1 class="tm-page-title">My Projects</h1>
+        <p class="tm-page-sub">A little more clarity. A few more voices understood. Pick up where you left off.</p>
+    </div>
+    <a asp-controller="Project" asp-action="Create" class="tm-btn tm-btn-primary" style="width:auto;">
+        <i class="bi bi-plus-lg"></i> New Project
+    </a>
+</div>
+
+<div class="tm-stats">
+    <div class="tm-stat">
+        <strong>@Model.TotalProjects</strong>
+        <span>@(Model.TotalProjects == 1 ? "Project" : "Projects")</span>
+    </div>
+    <div class="tm-stat">
+        <strong>@Model.InProgress</strong>
+        <span>In progress@(Model.UnderReview > 0 ? $" · {Model.UnderReview} with a revisor" : "")</span>
+    </div>
+    <div class="tm-stat">
+        <strong>@Model.CuesRemaining.ToString("N0")</strong>
+        <span>@(Model.CuesRemaining == 1 ? "Line left to translate" : "Lines left to translate")</span>
+    </div>
+</div>
+
+@if (Model.ToReview.Any())
+{
+    <section class="tm-review-queue">
+        <div class="tm-section-header">
+            <h2 class="tm-section-title">
+                <i class="bi bi-search"></i> To revise
+                @if (Model.AwaitingReview > 0)
+                {
+                    <span class="tm-section-badge">@Model.AwaitingReview waiting on you</span>
+                }
+            </h2>
+            <p class="tm-page-sub">Projects other translators have asked you to look over.</p>
+        </div>
+        <div class="tm-projects-grid">
+            @foreach (var card in Model.ToReview)
+            {
+                <partial name="_ProjectCard" model="card" />
+            }
+        </div>
+    </section>
+}
+
+<div class="tm-dashboard-tools">
+    <input id="projectSearch" type="search" placeholder="Find a project or language…" aria-label="Search projects" />
+    <select id="projectFilter" aria-label="Filter project status">
+        <option value="">All statuses</option>
+        <option value="InProgress">In progress</option>
+        <option value="UnderReview">With revisor</option>
+        <option value="ChangesRequested">Revised</option>
+        <option value="Completed">Completed</option>
+    </select>
+    <span id="projectCount" role="status" class="tm-page-sub"></span>
+</div>
+<p id="noProjectMatches" class="tm-page-sub" hidden>No projects match your search.</p>
+
+@if (!Model.Projects.Any())
+{
+    <div class="tm-empty-state">
+        <i class="bi bi-film"></i>
+        <h3>@(Model.ToReview.Any() ? "No projects of your own yet" : "No projects yet")</h3>
+        <p>Create your first translation project to get started.</p>
+        <a asp-controller="Project" asp-action="Create" class="tm-btn tm-btn-primary" style="width:auto; margin-top:12px;">
+            <i class="bi bi-plus-lg"></i> New Project
+        </a>
+    </div>
+}
+else
+{
+    <div class="tm-projects-grid" id="ownedProjects">
+        @foreach (var card in Model.Projects)
+        {
+            <partial name="_ProjectCard" model="card" />
+        }
+    </div>
+}
+
+<!-- Delete confirmation modal -->
+<div class="tm-modal-backdrop" id="deleteModal" style="display:none;">
+    <div class="tm-modal">
+        <div class="tm-modal-icon"><i class="bi bi-exclamation-triangle-fill"></i></div>
+        <h3 class="tm-modal-title">Delete Project?</h3>
+        <p class="tm-modal-msg" id="deleteModalMsg"></p>
+        <div class="tm-modal-actions">
+            <button class="tm-btn-sm" id="cancelDelete" style="padding:8px 20px;">Cancel</button>
+            <button class="tm-btn-sm" id="confirmDelete"
+                    style="padding:8px 20px; background:var(--danger); color:#fff; border-color:var(--danger);">
+                <i class="bi bi-trash3"></i> Delete
+            </button>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    const projectCount = document.getElementById('projectCount');
+    const noMatches    = document.getElementById('noProjectMatches');
+    // Searching and filtering apply to the translator's own projects only; the
+    // revise queue is short and always fully visible.
+    const owned        = document.getElementById('ownedProjects');
+    const cards        = owned ? [...owned.querySelectorAll('.tm-project-card')] : [];
+
+    function filterProjects() {
+        const query  = document.getElementById('projectSearch').value.toLocaleLowerCase();
+        const status = document.getElementById('projectFilter').value;
+        let shown = 0;
+        for (const card of cards) {
+            const hit = card.dataset.search.toLocaleLowerCase().includes(query)
+                     && (!status || card.dataset.status === status);
+            card.hidden = !hit;
+            if (hit) shown++;
+        }
+        projectCount.textContent = shown === cards.length
+            ? `${shown} project${shown === 1 ? '' : 's'}`
+            : `${shown} of ${cards.length} projects`;
+        noMatches.hidden = shown > 0 || cards.length === 0;
+    }
+
+    document.getElementById('projectSearch').addEventListener('input', filterProjects);
+    document.getElementById('projectFilter').addEventListener('change', filterProjects);
+    filterProjects();
+
+    // ── Delete confirmation ──
+    const modal = document.getElementById('deleteModal');
+    let pendingDeleteId = null;
+
+    function closeModal() {
+        modal.style.display = 'none';
+        pendingDeleteId = null;
+    }
+
+    for (const btn of document.querySelectorAll('.tm-delete-project-btn')) {
+        btn.addEventListener('click', () => {
+            pendingDeleteId = btn.dataset.id;
+            document.getElementById('deleteModalMsg').textContent =
+                `"${btn.dataset.title}" and all its subtitles will be permanently deleted. This cannot be undone.`;
+            modal.style.display = 'flex';
+            document.getElementById('cancelDelete').focus();
+        });
+    }
+
+    document.getElementById('cancelDelete').addEventListener('click', closeModal);
+    document.getElementById('confirmDelete').addEventListener('click', () => {
+        if (pendingDeleteId) document.getElementById(`deleteForm-${pendingDeleteId}`).submit();
+    });
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    // A confirmation dialog that cannot be dismissed with Escape is a trap.
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && modal.style.display === 'flex') closeModal();
+    });
+</script>
+}

@@ -1,0 +1,262 @@
+@{ ViewData["Title"] = "Keyboard Shortcuts"; }
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/shortcuts.css" asp-append-version="true" />
+}
+
+@Html.AntiForgeryToken()
+
+<div class="tm-shortcuts-header">
+    <div>
+        <div class="tm-page-title">Keyboard Shortcuts</div>
+        <div class="tm-page-sub">Customize the shortcut for every action in the subtitle editor. Changes apply once you press Save.</div>
+    </div>
+    <div class="tm-shortcuts-actions">
+        <span id="dirtyBadge" class="tm-shortcuts-dirty" hidden>Unsaved changes</span>
+        <span id="shortcutsToast" class="tm-shortcuts-dirty" style="color:var(--success); background:rgba(255,212,0,0.1);" hidden></span>
+        <button class="tm-btn-sm" id="resetAllShortcuts" title="Reset every shortcut to its default"><i class="bi bi-arrow-counterclockwise"></i> Reset all</button>
+        <button class="tm-btn-sm" id="cancelShortcuts" disabled>Cancel</button>
+        <button class="tm-btn-sm tm-btn-sm-primary" id="saveShortcuts" disabled><i class="bi bi-check-lg"></i> Save changes</button>
+    </div>
+</div>
+
+<div class="tm-shortcuts-search">
+    <i class="bi bi-search"></i>
+    <input type="search" id="shortcutSearch" placeholder="Search for a function (e.g. &quot;save&quot;, &quot;split&quot;, &quot;play&quot;)…" aria-label="Search keyboard shortcuts" />
+</div>
+
+<div id="shortcutsContainer"></div>
+
+@section Scripts {
+<script src="~/js/shortcuts.js" asp-append-version="true"></script>
+<script>
+(function () {
+    const container    = document.getElementById('shortcutsContainer');
+    const searchInput  = document.getElementById('shortcutSearch');
+    const dirtyBadge    = document.getElementById('dirtyBadge');
+    const saveBtn       = document.getElementById('saveShortcuts');
+    const cancelBtn     = document.getElementById('cancelShortcuts');
+    const resetAllBtn   = document.getElementById('resetAllShortcuts');
+    const toast         = document.getElementById('shortcutsToast');
+    const token         = document.querySelector('[name="__RequestVerificationToken"]').value;
+
+    let serverOverrides = {};
+    let working = {};
+    let recordingId = null;
+
+    function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function defaultOf(id) { return Shortcuts.byId(id)?.default || ''; }
+    function serverEffective(id) {
+        return Object.prototype.hasOwnProperty.call(serverOverrides, id) ? serverOverrides[id] : defaultOf(id);
+    }
+    function isDirty(id) { return working[id] !== serverEffective(id); }
+    function anyDirty() { return Shortcuts.FUNCTIONS.some(f => isDirty(f.id)); }
+    function comboOwner(combo, excludeId) {
+        if (!combo) return null;
+        return Shortcuts.FUNCTIONS.find(f => f.id !== excludeId && working[f.id] === combo);
+    }
+
+    function formatCombo(combo) {
+        if (!combo) return '<span class="tm-shortcut-combo-empty">Unassigned</span>';
+        return combo.split('+').map(p => `<kbd>${escapeHtml(p)}</kbd>`).join('');
+    }
+
+    function matchesSearch(fn, query) {
+        if (!query) return true;
+        const q = query.toLocaleLowerCase();
+        return fn.label.toLocaleLowerCase().includes(q)
+            || (fn.description || '').toLocaleLowerCase().includes(q)
+            || (working[fn.id] || '').toLocaleLowerCase().includes(q);
+    }
+
+    function render() {
+        const query = searchInput.value.trim();
+        container.innerHTML = '';
+        let anyVisible = false;
+        Shortcuts.CATEGORIES.forEach(cat => {
+            const fns = Shortcuts.FUNCTIONS.filter(f => f.category === cat.id && matchesSearch(f, query));
+            if (!fns.length) return;
+            anyVisible = true;
+            const section = document.createElement('div');
+            section.className = 'tm-shortcuts-category';
+            section.innerHTML = `<div class="tm-shortcuts-category-title"><i class="bi ${cat.icon}"></i> ${cat.label}</div>`;
+            const list = document.createElement('div');
+            list.className = 'tm-shortcuts-list';
+            fns.forEach(fn => list.appendChild(renderRow(fn)));
+            section.appendChild(list);
+            container.appendChild(section);
+        });
+        if (!anyVisible) container.innerHTML = '<div class="tm-shortcuts-empty">No functions match your search.</div>';
+        dirtyBadge.hidden = !anyDirty();
+        saveBtn.disabled = !anyDirty();
+        cancelBtn.disabled = !anyDirty();
+    }
+
+    function renderRow(fn) {
+        const row = document.createElement('div');
+        row.className = 'tm-shortcut-row';
+        row.dataset.id = fn.id;
+        const combo = working[fn.id];
+        const dirty = isDirty(fn.id);
+        row.innerHTML = `
+            <div class="tm-shortcut-info">
+                <div class="tm-shortcut-label">${escapeHtml(fn.label)}${dirty ? '<span class="tm-shortcut-changed" title="Unsaved change"></span>' : ''}</div>
+                <div class="tm-shortcut-desc">${escapeHtml(fn.description || '')}</div>
+            </div>
+            <div class="tm-shortcut-combo" data-role="combo">${formatCombo(combo)}</div>
+            <div class="tm-shortcut-row-buttons">
+                ${fn.locked ? '<span class="tm-shortcut-combo-empty" title="This shortcut is fixed by the browser">Fixed</span>' : `
+                <button class="tm-icon-btn-sm" data-action="change" title="Record a new shortcut"><i class="bi bi-pencil"></i></button>
+                <button class="tm-icon-btn-sm" data-action="clear" title="Unassign this shortcut"><i class="bi bi-x-lg"></i></button>
+                <button class="tm-icon-btn-sm" data-action="reset" title="Reset to default" ${combo === fn.default ? 'disabled' : ''}><i class="bi bi-arrow-counterclockwise"></i></button>`}
+            </div>`;
+        if (!fn.locked) {
+            row.querySelector('[data-action="change"]').addEventListener('click', () => startRecording(fn.id, row));
+            row.querySelector('[data-action="clear"]').addEventListener('click', () => applyChange(fn.id, ''));
+            row.querySelector('[data-action="reset"]').addEventListener('click', () => applyChange(fn.id, fn.default));
+        }
+        return row;
+    }
+
+    function applyChange(id, combo, options) {
+        options = options || {};
+        const owner = combo ? comboOwner(combo, id) : null;
+        if (owner && !options.force) { showConflict(id, combo, owner); return; }
+        if (owner) working[owner.id] = '';
+        working[id] = combo;
+        render();
+    }
+
+    function showConflict(id, combo, owner) {
+        render();
+        const row = container.querySelector(`.tm-shortcut-row[data-id="${id}"]`);
+        if (!row) return;
+        const banner = document.createElement('div');
+        banner.className = 'tm-shortcut-conflict';
+        banner.innerHTML = `<i class="bi bi-exclamation-triangle-fill"></i> <span>${formatCombo(combo)} is already assigned to <strong>${escapeHtml(owner.label)}</strong>.</span>`;
+        const assign = document.createElement('button');
+        assign.className = 'tm-btn-sm tm-btn-sm-primary';
+        assign.textContent = 'Reassign anyway';
+        assign.addEventListener('click', () => applyChange(id, combo, { force: true }));
+        const cancelOne = document.createElement('button');
+        cancelOne.className = 'tm-btn-sm';
+        cancelOne.textContent = 'Keep current';
+        cancelOne.addEventListener('click', render);
+        banner.appendChild(assign);
+        banner.appendChild(cancelOne);
+        row.after(banner);
+    }
+
+    function startRecording(id, row) {
+        if (recordingId) return;
+        recordingId = id;
+        const comboEl = row.querySelector('[data-role="combo"]');
+        // Escape is deliberately NOT a special "cancel" key here — it needs to be
+        // recordable like any other key (e.g. binding Play/Pause to Esc).
+        // Cancelling instead happens by clicking anywhere else, or the ✕ below.
+        comboEl.innerHTML = '<span class="tm-shortcut-recording">Press a key…</span> <button type="button" class="tm-icon-btn-sm" data-role="cancel-record" title="Cancel"><i class="bi bi-x-lg"></i></button>';
+
+        function onKey(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const combo = Shortcuts.describe(e);
+            if (!combo) return; // lone modifier — keep waiting
+            cleanup();
+            applyChange(id, combo);
+        }
+        function onClickAway(e) {
+            if (row.contains(e.target)) return;
+            cleanup();
+            render();
+        }
+        function cleanup() {
+            document.removeEventListener('keydown', onKey, true);
+            document.removeEventListener('mousedown', onClickAway, true);
+            recordingId = null;
+        }
+        document.addEventListener('keydown', onKey, true);
+        // Deferred so the click that opened recording doesn't immediately close it.
+        setTimeout(() => document.addEventListener('mousedown', onClickAway, true), 0);
+        comboEl.querySelector('[data-role="cancel-record"]').addEventListener('mousedown', e => e.stopPropagation());
+        comboEl.querySelector('[data-role="cancel-record"]').addEventListener('click', () => { cleanup(); render(); });
+    }
+
+    function flashStatus(msg) {
+        toast.textContent = msg;
+        toast.hidden = false;
+        clearTimeout(flashStatus._t);
+        flashStatus._t = setTimeout(() => { toast.hidden = true; }, 2500);
+    }
+
+    async function save() {
+        const items = Shortcuts.FUNCTIONS.filter(f => isDirty(f.id)).map(f => ({ functionId: f.id, keyCombo: working[f.id] || '' }));
+        if (!items.length) return;
+        saveBtn.disabled = true;
+        try {
+            const res = await fetch('/settings/shortcuts/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': token },
+                body: JSON.stringify(items)
+            });
+            if (!res.ok) throw new Error('Save failed');
+            items.forEach(i => serverOverrides[i.functionId] = i.keyCombo);
+            Shortcuts.setOverrides(Object.assign({}, serverOverrides));
+            render();
+            flashStatus('Shortcuts saved.');
+        } catch {
+            alert('Could not save your shortcuts. Please check your connection and try again.');
+        } finally {
+            saveBtn.disabled = !anyDirty();
+        }
+    }
+
+    function cancel() {
+        working = {};
+        Shortcuts.FUNCTIONS.forEach(f => working[f.id] = serverEffective(f.id));
+        render();
+    }
+
+    async function resetAll() {
+        if (!confirm('Reset every keyboard shortcut to its default? This cannot be undone.')) return;
+        try {
+            const res = await fetch('/settings/shortcuts/reset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'RequestVerificationToken': token },
+                body: ''
+            });
+            if (!res.ok) throw new Error('Reset failed');
+            serverOverrides = {};
+            Shortcuts.setOverrides({});
+            cancel();
+            flashStatus('All shortcuts reset to default.');
+        } catch {
+            alert('Could not reset your shortcuts. Please check your connection and try again.');
+        }
+    }
+
+    async function init() {
+        try {
+            const res = await fetch('/settings/shortcuts/data');
+            if (!res.ok) throw new Error('Load failed');
+            const data = await res.json();
+            serverOverrides = data.overrides || {};
+        } catch {
+            container.innerHTML = '<div class="tm-shortcuts-empty">Could not load your shortcuts. Reload the page to try again.</div>';
+            return;
+        }
+        cancel();
+    }
+
+    searchInput.addEventListener('input', render);
+    saveBtn.addEventListener('click', save);
+    cancelBtn.addEventListener('click', cancel);
+    resetAllBtn.addEventListener('click', resetAll);
+    window.addEventListener('beforeunload', e => { if (anyDirty()) { e.preventDefault(); e.returnValue = ''; } });
+
+    init();
+})();
+</script>
+}

@@ -1,0 +1,103 @@
+@model TraMslate.Models.Project
+@{ ViewData["Title"] = "New Project"; }
+
+<div style="max-width: 560px; margin: 0 auto;">
+
+    <div class="tm-page-header" style="margin-bottom: 28px;">
+        <div>
+            <h1 class="tm-page-title">New Project</h1>
+            <p class="tm-page-sub">Set up a new translation project</p>
+        </div>
+        <a asp-controller="Dashboard" asp-action="Index" class="tm-btn" style="width:auto; background:var(--surface2); color:var(--text-muted);">
+            <i class="bi bi-arrow-left"></i> Back
+        </a>
+    </div>
+
+    <div class="tm-card">
+        <form asp-action="Create" method="post" enctype="multipart/form-data">
+            @Html.AntiForgeryToken()
+            <div asp-validation-summary="All" class="tm-alert-danger"></div>
+
+            <div class="tm-form-group">
+                <label asp-for="Title">Project Title</label>
+                <input asp-for="Title" type="text" placeholder="e.g. Interstellar — Arabic Subtitles" />
+                <span asp-validation-for="Title" class="text-danger" style="font-size:0.8rem"></span>
+            </div>
+
+            <div class="tm-form-group">
+                <label asp-for="Description">Description <span style="color:var(--text-muted); font-weight:400;">(optional)</span></label>
+                <input asp-for="Description" type="text" placeholder="Any notes about this project" />
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                <div class="tm-form-group">
+                    <label asp-for="SourceLanguage">Source Language</label>
+                    <select asp-for="SourceLanguage">
+                        <option>English</option>
+                        <option>French</option>
+                        <option>Spanish</option>
+                        <option>German</option>
+                        <option>Arabic</option>
+                        <option>Other</option>
+                    </select>
+                </div>
+
+                <div class="tm-form-group">
+                    <label asp-for="TargetLanguage">Target Language</label>
+                    <select asp-for="TargetLanguage">
+                        <option value="">— Select —</option>
+                        <option>Arabic</option>
+                        <option>French</option>
+                        <option>Spanish</option>
+                        <option>German</option>
+                        <option>Italian</option>
+                        <option>Portuguese</option>
+                        <option>Turkish</option>
+                        <option>Persian</option>
+                        <option>Hebrew</option>
+                        <option>Other</option>
+                    </select>
+                    <span asp-validation-for="TargetLanguage" class="text-danger" style="font-size:0.8rem"></span>
+                </div>
+            </div>
+
+            <div class="tm-form-group">
+                <label>Video File</label>
+                <div class="tm-file-drop" id="fileDrop">
+                    <i class="bi bi-cloud-arrow-up"></i>
+                    <p>Drop your video here or <span>browse</span></p>
+                    <p class="tm-file-hint">Optional · MP4 or WebM recommended · max 2GB</p>
+                    <input type="file" name="VideoFile" id="videoFile" accept="video/*" />
+                </div>
+                <p id="fileNameDisplay" style="font-size:0.8rem; color:var(--accent); margin-top:6px;"></p>
+            </div>
+
+            <button type="submit" class="tm-btn tm-btn-primary" style="margin-top:8px;">
+                <i class="bi bi-play-circle"></i> Create & Open Editor
+            </button>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    const input = document.getElementById('videoFile');
+    const display = document.getElementById('fileNameDisplay');
+    const drop = document.getElementById('fileDrop');
+
+    input.addEventListener('change', () => {
+        if (input.files[0]) display.textContent = '📎 ' + input.files[0].name;
+    });
+
+    drop.addEventListener('click', e => { if (e.target !== input) input.click(); });
+
+    drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('tm-file-drop--over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('tm-file-drop--over'));
+    drop.addEventListener('drop', e => {
+        e.preventDefault();
+        drop.classList.remove('tm-file-drop--over');
+        input.files = e.dataTransfer.files;
+        if (input.files[0]) display.textContent = '📎 ' + input.files[0].name;
+    });
+</script>
+}

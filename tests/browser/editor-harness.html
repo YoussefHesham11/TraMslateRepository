@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Editor layout harness</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" />
+<link rel="stylesheet" href="../../wwwroot/css/site.css" />
+<link rel="stylesheet" href="../../wwwroot/css/workspace.css" />
+
+<link rel="stylesheet" href="../../wwwroot/css/timeline.css" />
+<link rel="stylesheet" href="../../wwwroot/css/cues.css" />
+<style>
+    /* The editor shell is pinned to the viewport (see .tm-editor-wrap),
+       so the page itself never scrolls and .tm-main adds no padding
+       around it. Below 900px the shell returns to normal flow. */
+    body { overflow: hidden; }
+    .tm-main { padding: 0; min-height: 0; }
+    @media (max-width: 900px) {
+        body { overflow: auto; }
+        .tm-main { padding: 24px 16px; min-height: calc(100vh - var(--nav-h)); }
+    }
+</style>
+</head>
+<body>
+<div class="tm-topnav">
+  <div class="tm-topnav-left">
+    <div class="tm-logo">Tra<span>M</span>slate</div>
+    <nav class="tm-topnav-links"><a href="#">Dashboard</a><a href="#">New Project</a><a href="#">Shortcuts</a></nav>
+  </div>
+  <div class="tm-topnav-right"><span class="tm-nav-user">translator</span></div>
+</div>
+<main class="tm-main">
+<div class="tm-editor-wrap">
+    <input type="hidden" name="__RequestVerificationToken" value="x" />
+
+    <!-- ── Top Bar ── -->
+    <div class="tm-editor-topbar">
+        <div class="tm-editor-topbar-left">
+            <a class="tm-icon-btn">
+                <i class="bi bi-arrow-left"></i>
+            </a>
+            <button class="tm-icon-btn" id="btnTogglePanel" title="Collapse/expand the subtitle list for a larger video view">
+                <i class="bi bi-layout-sidebar-inset"></i>
+            </button>
+            <div>
+                <div class="tm-editor-title">The Bureau — S01E04</div>
+                <div class="tm-editor-langs">
+                    <i class="bi bi-translate"></i>
+                    English → Arabic
+                </div>
+            </div>
+        </div>
+        <div class="tm-editor-topbar-right">
+            <select id="projectStatus" class="tm-speed-select" aria-label="Project status">
+                <option value="InProgress">In progress</option><option value="UnderReview">Under review</option><option value="Completed">Completed</option>
+            </select>
+            <span id="saveStatus" role="status" class="tm-save-status">Loading…</span>
+            <label class="tm-btn-sm" style="cursor:pointer;" title="Import an SRT/VTT subtitle file, or a Word document with one dialogue line per paragraph">
+                <i class="bi bi-file-earmark-arrow-up"></i> Import Script
+                <input type="file" id="importScript" accept=".srt,.vtt,.docx" style="display:none;" />
+            </label>
+            <select id="fpsSelect" class="tm-speed-select" title="Frames per second">
+                <option value="23.976">23.976 fps</option>
+                <option value="24">24 fps</option>
+                <option value="25" selected>25 fps</option>
+                <option value="29.97">29.97 fps</option>
+                <option value="30">30 fps</option>
+            </select>
+            <button class="tm-btn-sm" id="btnExportSrt"><i class="bi bi-download"></i> SRT</button>
+            <button class="tm-btn-sm" id="btnExportVtt"><i class="bi bi-download"></i> VTT</button>
+            <button class="tm-btn-sm tm-btn-sm-primary" id="btnSave">
+                <i class="bi bi-floppy"></i> Save
+            </button>
+        </div>
+    </div>
+
+    <!-- ── Banner: crash recovery, save conflicts ── -->
+    <div class="tm-banner" id="editorBanner" role="status" hidden></div>
+
+    <!-- ── Main Editor Body ── -->
+    <div class="tm-editor-body">
+
+        <!-- ── Left: Video + Controls ── -->
+        <div class="tm-editor-left">
+
+            <!-- Video -->
+            <div class="tm-video-wrap">
+                
+                    <video id="videoPlayer" controls preload="auto">
+                        <source src="../../wwwroot/uploads/9b735b9e-1c65-40cc-bb72-45da6553a1f0.mp4" />
+                    </video>
+                
+                <!-- Broadcast overlays -->
+                <div class="tm-vid-overlay-tl">
+                    <span class="tm-vid-label">PGID: 42</span>
+                    <span class="tm-vid-label" id="smpteDisplay">SMPTE 00:00:00:00</span>
+                </div>
+                <div class="tm-vid-overlay-tr">
+                    <span class="tm-vid-label">MID: 42-20260922</span>
+                    <span class="tm-vid-label" id="mediaTimeDisplay">00:00:00,000</span>
+                </div>
+                <div class="tm-vid-watermark" id="vidWatermark">translator</div>
+                <div class="tm-subtitle-overlay" id="subtitleOverlay"></div>
+            </div>
+
+            <!-- Controls -->
+            <div class="tm-playback-controls">
+                <button class="tm-icon-btn" id="btnSkipBack" title="−5s">
+                    <i class="bi bi-skip-backward-fill"></i>
+                </button>
+                <button class="tm-icon-btn tm-play-btn" id="btnPlay" title="Play/Pause (Space)">
+                    <i class="bi bi-play-fill"></i>
+                </button>
+                <button class="tm-icon-btn" id="btnSkipFwd" title="+5s">
+                    <i class="bi bi-skip-forward-fill"></i>
+                </button>
+                <button class="tm-icon-btn-sm" id="btnFrameBack" title="Previous frame (,)">
+                    <i class="bi bi-caret-left-fill"></i>
+                </button>
+                <button class="tm-icon-btn-sm" id="btnFrameFwd" title="Next frame (.)">
+                    <i class="bi bi-caret-right-fill"></i>
+                </button>
+                <div class="tm-timecode-wrap">
+                    <span class="tm-timecode" id="timecodeHMS">00:00:00</span>
+                    <span class="tm-timecode-sep">:</span>
+                    <span class="tm-timecode tm-timecode-frames" id="timecodeFrames">00</span>
+                </div>
+                <div style="flex:1;"></div>
+                <label style="font-size:0.8rem; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+                    Speed
+                    <select id="playbackSpeed" class="tm-speed-select">
+                        <option value="0.5">0.5×</option>
+                        <option value="0.75">0.75×</option>
+                        <option value="1" selected>1×</option>
+                        <option value="1.25">1.25×</option>
+                        <option value="1.5">1.5×</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+
+        <!-- ── Resize Handle ── -->
+        <div class="tm-resize-handle" id="resizeHandle">
+            <div class="tm-resize-grip"></div>
+        </div>
+
+        <!-- ── Right: Subtitle Events Panel ── -->
+        <div class="tm-editor-right">
+            <div class="tm-events-header">
+                <span class="tm-events-title">Subtitles</span>
+                <span class="tm-events-count" id="cueCount"></span>
+                <span class="tm-events-spacer"></span>
+                <button class="tm-icon-btn-sm" id="btnSwapColumns" title="Swap original/translation columns"><i class="bi bi-arrow-left-right"></i></button>
+                <button class="tm-icon-btn-sm" id="btnCardLayout" title="Toggle side-by-side / stacked cue layout"><i class="bi bi-layout-split"></i></button>
+                <button class="tm-icon-btn-sm" id="btnToggleTools" title="Show/hide search, filters, and quick tools"><i class="bi bi-sliders"></i></button>
+                <button class="tm-btn-sm tm-btn-sm-primary" id="btnAddEvent" title="Add new subtitle line">
+                    <i class="bi bi-plus-lg"></i> Add Line
+                </button>
+            </div>
+            <div class="tm-cue-headrow" aria-hidden="true">
+                <span></span>
+                <span class="tm-col-header-num">#</span>
+                <span class="tm-col-header-time">In</span>
+                <span class="tm-col-header-dur">Dur</span>
+                <span class="tm-col-header-original">Original</span>
+                <span class="tm-col-header-translation">Translation</span>
+                <span></span>
+            </div>
+            <div class="tm-workspace-tools" id="workspaceTools" hidden>
+                <div class="tm-progress-summary"><strong id="cueProgress">Loading subtitles…</strong><span id="cueIssues"></span></div>
+                <progress id="translationProgress" max="100" value="0" aria-label="Translation progress"></progress>
+                <div class="tm-tool-row">
+                    <input id="cueSearch" type="search" placeholder="Search source or translation…" aria-label="Search subtitles" />
+                    <select id="cueFilter" aria-label="Filter subtitles">
+                        <option value="all">All cues</option>
+                        <option value="untranslated">Untranslated</option>
+                        <option value="issues">Needs attention</option>
+                        <option value="status-0">Marked draft</option>
+                        <option value="status-1">Marked done</option>
+                        <option value="status-2">Marked for review</option>
+                        <option value="status-3">Approved</option>
+                    </select>
+                </div>
+                <div class="tm-tool-row tm-tool-icons">
+                    <button class="tm-icon-btn-sm" id="undoEdit" title="Undo"><i class="bi bi-arrow-counterclockwise"></i></button>
+                    <button class="tm-icon-btn-sm" id="redoEdit" title="Redo"><i class="bi bi-arrow-clockwise"></i></button>
+                    <span class="tm-tool-sep"></span>
+                    <button class="tm-icon-btn-sm" id="nextUntranslated" title="Jump to next untranslated cue"><i class="bi bi-skip-end-fill"></i></button>
+                    <button class="tm-icon-btn-sm" id="copySource" title="Copy source text into this cue's translation"><i class="bi bi-files"></i></button>
+                    <span class="tm-tool-sep"></span>
+                    <button class="tm-icon-btn-sm" id="btnSplitCue" title="Split the selected cue at the playhead"><i class="bi bi-scissors"></i></button>
+                    <button class="tm-icon-btn-sm" id="btnMergeCue" title="Merge the selected cue with the next one"><i class="bi bi-arrows-collapse"></i></button>
+                </div>
+                <details class="tm-more-tools tm-spec-tools">
+                    <summary><i class="bi bi-rulers"></i> Delivery spec</summary>
+                    <div class="tm-tool-row">
+                        <select id="specProfile" class="tm-speed-select" aria-label="Delivery profile" title="Quality limits to check this project against"></select>
+                        <button class="tm-btn-sm" id="specReset" title="Return this profile to its preset values">Reset</button>
+                    </div>
+                    <div class="tm-spec-grid">
+                        <label>Characters/line <input type="number" id="specChars" min="10" max="120" step="1" /></label>
+                        <label>Lines <input type="number" id="specLines" min="1" max="5" step="1" /></label>
+                        <label>Characters/second <input type="number" id="specCps" min="5" max="40" step="0.5" /></label>
+                        <label>Min duration (s) <input type="number" id="specMinDur" min="0.2" max="5" step="0.1" /></label>
+                        <label>Max duration (s) <input type="number" id="specMaxDur" min="1" max="30" step="0.5" /></label>
+                        <label>Min gap (s) <input type="number" id="specGap" min="0" max="2" step="0.01" /></label>
+                    </div>
+                    <p class="tm-tool-hint">Every quality warning, the character counter and the reading-speed badge follow these numbers. The presets are sensible starting points, not certified specs — broadcasters and streamers revise their guidelines, so check your client's current one and adjust here. Your changes are kept with this project.</p>
+                </details>
+                <details class="tm-more-tools"><summary><i class="bi bi-three-dots"></i> More tools</summary>
+                    <p class="tm-tool-hint" style="margin-top:10px;">Shift timing</p>
+                    <div class="tm-tool-row">
+                        <label style="font-size:0.8rem; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+                            Shift by <input type="text" id="shiftTimecode" placeholder="00:00:00:00" value="00:00:00:00" style="width:120px; font-family:'Courier New', monospace;" aria-label="Shift amount as hours:minutes:seconds:frames, or a plain number of seconds" />
+                        </label>
+                        <select id="shiftDirection" class="tm-speed-select" aria-label="Shift direction" title="Move cues earlier or later">
+                            <option value="1">Later (+)</option>
+                            <option value="-1">Earlier (−)</option>
+                        </select>
+                        <button class="tm-btn-sm" id="shiftAll" title="Shift every cue's timing by this much">Shift all cues</button>
+                        <button class="tm-btn-sm" id="shiftFromHere" title="Shift the selected cue and every cue after it">Shift from selected</button>
+                    </div>
+                    <div class="tm-tool-row">
+                        <button class="tm-btn-sm" id="shiftZero" title="Shift every cue so the earliest one starts at 00:00:00,000">Zero out timing</button>
+                    </div>
+                    <div class="tm-tool-row">
+                        <label style="font-size:0.8rem; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+                            Cues # <input type="number" id="shiftFromNum" min="1" placeholder="from" style="width:70px;" aria-label="Shift range start cue number" />
+                            to <input type="number" id="shiftToNum" min="1" placeholder="to" style="width:70px;" aria-label="Shift range end cue number" />
+                        </label>
+                        <button class="tm-btn-sm" id="shiftRange" title="Shift only the cues numbered in this range">Shift range</button>
+                    </div>
+                    <p class="tm-tool-hint">Enter the amount as HH:MM:SS:FF (frames use the fps selector above), HH:MM:SS, MM:SS, or plain seconds, then pick Earlier or Later — handy when the whole track has drifted out of sync with the video. A shift that would cross 00:00:00 or 24:00:00 is trimmed to the farthest safe point rather than blocked. "Zero out timing" rebases every cue so the earliest one starts at 00:00:00 — useful for scripts timed against a 1-hour broadcast offset. Cue numbers refer to the # shown on each card.</p>
+                    <p class="tm-tool-hint" style="margin-top:10px;">Find &amp; replace</p>
+                    <div class="tm-tool-row"><input id="findText" placeholder="Find in translations" aria-label="Find text" /><input id="replaceText" placeholder="Replace with" aria-label="Replacement text" /><button class="tm-btn-sm" id="replaceAll">Replace all</button></div>
+                    <p class="tm-tool-hint">Every shortcut below is the default — customize any of them on the <a style="color:var(--accent);">Keyboard Shortcuts</a> page.<br />Ctrl/⌘ S: save · Ctrl/⌘ Z: undo · Ctrl/⌘ Shift Z: redo<br />Outside text fields: Space: play/pause · ← →: seek 1s · Shift + ← →: skip 5s · , / .: step one frame · I / O: mark timing · ↑ / ↓ with Ctrl: select cue.<br />Quality guidance: 42 characters per line, 2 lines, up to 21 characters/second.</p>
+                </details>
+            </div>
+            <div class="tm-events-list" id="eventsList"></div>
+        </div>
+
+    </div>
+
+    <!-- ── Full Width Timeline ── -->
+    <div class="tm-timeline-resize-handle" id="timelineResizeHandle">
+        <div class="tm-timeline-resize-grip"></div>
+    </div>
+    <div class="tm-timeline-toolbar">
+        <div class="tm-timeline-toolbar-group">
+            <button class="tm-icon-btn-sm" id="tlRewind" title="Rewind 10 seconds"><i class="bi bi-rewind-fill"></i></button>
+            <button class="tm-icon-btn-sm" id="tlPrevSub" title="Previous subtitle"><i class="bi bi-skip-start-fill"></i></button>
+            <button class="tm-icon-btn-sm" id="tlPlayPause" title="Play / Pause (Space)"><i class="bi bi-play-fill"></i></button>
+            <button class="tm-icon-btn-sm" id="tlStop" title="Stop and return to the selected cue's start"><i class="bi bi-stop-fill"></i></button>
+            <button class="tm-icon-btn-sm" id="tlNextSub" title="Next subtitle"><i class="bi bi-skip-end-fill"></i></button>
+            <button class="tm-icon-btn-sm" id="tlFastForward" title="Fast-forward 10 seconds"><i class="bi bi-fast-forward-fill"></i></button>
+            <span class="tm-tool-sep"></span>
+            <button class="tm-icon-btn-sm" id="tlPlaySelected" title="Play only the selected cue's range"><i class="bi bi-play-circle"></i></button>
+            <label class="tm-timeline-toggle" title="Pause automatically at the selected cue's out-time">
+                <input type="checkbox" id="tlAutoPauseOut" /> Auto-pause
+            </label>
+        </div>
+        <div class="tm-timeline-toolbar-group">
+            <button class="tm-icon-btn-sm" id="tlNudgeBack" title="Move selection slightly earlier"><i class="bi bi-arrow-left-short"></i></button>
+            <button class="tm-icon-btn-sm" id="tlNudgeFwd" title="Move selection slightly later"><i class="bi bi-arrow-right-short"></i></button>
+            <button class="tm-icon-btn-sm" id="tlShrink" title="Shorten duration"><i class="bi bi-dash-lg"></i></button>
+            <button class="tm-icon-btn-sm" id="tlGrow" title="Extend duration"><i class="bi bi-plus-lg"></i></button>
+            <select id="tlNudgeStep" class="tm-speed-select" title="Step size for nudge/duration buttons">
+                <option value="frame">1 frame</option>
+                <option value="10">10 ms</option>
+                <option value="50" selected>50 ms</option>
+                <option value="100">100 ms</option>
+                <option value="500">500 ms</option>
+            </select>
+            <span class="tm-tool-sep"></span>
+            <button class="tm-icon-btn-sm" id="tlDuplicate" title="Duplicate selected cue"><i class="bi bi-copy"></i></button>
+            <button class="tm-icon-btn-sm" id="tlLock" title="Lock / unlock selected cue(s)"><i class="bi bi-unlock"></i></button>
+            <label class="tm-timeline-toggle" title="Snap to the playhead, nearby cue edges, and frame boundaries while dragging">
+                <input type="checkbox" id="tlSnap" checked /> Snap
+            </label>
+            <span class="tm-tool-sep"></span>
+            <button class="tm-icon-btn-sm" id="tlZoomOut" title="Zoom out"><i class="bi bi-zoom-out"></i></button>
+            <button class="tm-icon-btn-sm" id="tlZoomFit" title="Fit whole timeline to window"><i class="bi bi-arrows-angle-contract"></i></button>
+            <button class="tm-icon-btn-sm" id="tlZoomIn" title="Zoom in"><i class="bi bi-zoom-in"></i></button>
+        </div>
+    </div>
+    <div class="tm-timeline-wrap" id="timelineWrap">
+        <div class="tm-timeline-scroll" id="timelineScroll">
+            <div class="tm-timeline-inner" id="timelineInner">
+                <canvas id="waveformCanvas"></canvas>
+                <div class="tm-timeline-cursor" id="timelineCursor"></div>
+                <div class="tm-timeline-events" id="timelineEvents"></div>
+                <div class="tm-timeline-timecodes" id="timelineTimecodes"></div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+
+</main>
+<script src="./harness-boot.js"></script>
+<script src="../../wwwroot/js/subtitle-core.js"></script>
+<script src="../../wwwroot/js/shortcuts.js"></script>
+<script src="../../wwwroot/js/editor.js"></script>
+<script src="./harness-measure.js"></script>
+</body>
+</html>

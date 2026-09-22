@@ -1,0 +1,242 @@
+/* ── Timeline toolbar ─────────────────────────────── */
+.tm-timeline-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 6px 14px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.tm-timeline-toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-wrap: wrap;
+}
+
+.tm-timeline-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding: 0 8px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.tm-timeline-toggle input { accent-color: var(--accent); cursor: pointer; }
+
+/* ── Scroll / zoom container ──────────────────────── */
+/* Height lives on --timeline-h in site.css, which shrinks it on short
+   windows; only the clipping behaviour belongs here. */
+.tm-timeline-wrap { overflow: hidden; }
+
+.tm-timeline-scroll {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.tm-timeline-inner {
+    position: relative;
+    height: 100%;
+    min-width: 100%;
+}
+
+/* The canvas is sized to the visible viewport (via its width/height
+   attributes, set in JS) and pinned to the left edge of the scroll
+   container as the much wider timelineInner scrolls underneath it — its
+   content is redrawn per-scroll to show whatever time range is visible. */
+#waveformCanvas {
+    display: block;
+    position: sticky;
+    top: 0;
+    left: 0;
+    z-index: 1;
+    width: auto;
+    height: auto;
+}
+
+.tm-timeline-cursor { z-index: 6; }
+
+/* ── Timeline blocks ──────────────────────────────── */
+/* The ruler + dialogue strip occupy the top 25px of the canvas (see
+   drawTimecodeRuler/drawWaveform) — the block track starts below that so
+   cue blocks never paint over the timecodes. */
+.tm-timeline-events {
+    --tm-ruler-h: 25px;
+    position: absolute;
+    top: var(--tm-ruler-h);
+    left: 0;
+    width: 100%;
+    height: calc(100% - var(--tm-ruler-h));
+    pointer-events: none;
+    z-index: 2;
+}
+
+.tm-timeline-block {
+    --tm-block-border: rgba(255,255,255,0.3);
+    --tm-block-fill: rgba(255,255,255,0.09);
+    position: absolute;
+    top: 6px;
+    height: calc(100% - 12px);
+    min-width: 3px;
+    background: var(--tm-block-fill);
+    border: 1px solid var(--tm-block-border);
+    border-radius: 4px;
+    cursor: grab;
+    transition: background 0.1s, border-color 0.1s;
+    pointer-events: all;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+}
+
+.tm-timeline-block:active { cursor: grabbing; }
+.tm-timeline-block:hover  { background: rgba(255,255,255,0.18); }
+
+/* Translated, no issues */
+.tm-timeline-block-done { --tm-block-border: #29c76f; --tm-block-fill: rgba(41,199,111,0.16); }
+/* Real timing/quality issue (short duration, fast reading speed, short gap, long line…) */
+.tm-timeline-block-warn { --tm-block-border: var(--warning); --tm-block-fill: rgba(255,179,0,0.16); }
+/* Overlaps a neighboring cue */
+.tm-timeline-block-overlap {
+    --tm-block-border: var(--danger);
+    background: repeating-linear-gradient(45deg, rgba(255,51,85,0.32), rgba(255,51,85,0.32) 5px, rgba(255,51,85,0.12) 5px, rgba(255,51,85,0.12) 10px);
+}
+/* Out-time before in-time, etc. */
+.tm-timeline-block-invalid { --tm-block-border: var(--danger); background: rgba(255,51,85,0.5); }
+.tm-timeline-block-locked  {
+    cursor: not-allowed;
+    opacity: 0.8;
+    background: repeating-linear-gradient(-45deg, rgba(154,154,165,0.28), rgba(154,154,165,0.28) 5px, rgba(154,154,165,0.1) 5px, rgba(154,154,165,0.1) 10px);
+}
+
+/* Selection always wins visually, regardless of status coloring above */
+.tm-timeline-block-selected{ border-color: #fff !important; box-shadow: 0 0 0 1px #fff inset; z-index: 2; }
+.tm-timeline-block-active  { background: var(--accent) !important; border-color: #fff !important; z-index: 3; }
+
+.tm-block-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 6px;
+    pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+}
+
+.tm-block-lock-icon {
+    position: absolute;
+    right: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.7rem;
+    color: #fff;
+    pointer-events: none;
+}
+
+.tm-block-handle {
+    position: absolute;
+    top: 0;
+    width: 6px;
+    height: 100%;
+    cursor: ew-resize;
+    z-index: 4;
+}
+
+.tm-block-handle-left  { left: 0; }
+.tm-block-handle-right { right: 0; }
+.tm-block-handle:hover { background: rgba(255,255,255,0.5); }
+
+/* ── Event list: multi-select / locked ───────────── */
+.tm-event-locked    { opacity: 0.8; }
+.tm-lock-btn:hover  { color: var(--warning); }
+
+/* Only the open cue renders as a card (see cues.css); inside it the two
+   text boxes still read as separate surfaces. */
+.tm-cue-item-open:hover .tm-event-col { border-color: var(--text-muted); }
+
+/* ── Layout toggles: collapse panel / swap columns / stack cards ── */
+.tm-panel-collapsed .tm-editor-right,
+.tm-panel-collapsed .tm-resize-handle { display: none; }
+.tm-panel-collapsed .tm-editor-left   { flex: 1 1 100% !important; width: 100% !important; }
+
+.tm-columns-swapped .tm-event-col-original      { order: 2; }
+.tm-columns-swapped .tm-event-col-translation   { order: 1; }
+.tm-columns-swapped .tm-col-header-original     { order: 2; }
+.tm-columns-swapped .tm-col-header-translation  { order: 1; }
+
+.tm-cards-stacked .tm-event-columns { grid-template-columns: 1fr; }
+
+/* ── Original / Translation as two distinct cards ────────────────── */
+.tm-event-columns { gap: 12px; }
+
+.tm-event-col {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.tm-event-col-original { background: rgba(255,255,255,0.03); border-style: dashed; }
+.tm-event-col-original:focus-within { border-color: var(--text-muted); border-style: solid; }
+.tm-event-col-translation:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(226,0,26,0.15); }
+
+/* The textareas sit flush inside their own card now, instead of carrying
+   their own border/background (that used to make a box-inside-a-box look). */
+.tm-event-col-original .tm-original-input,
+.tm-event-col-translation .tm-translated-input {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+.tm-event-col-translation .tm-translated-input:focus { box-shadow: none; }
+
+.tm-event-col-readonly { background: rgba(255,255,255,0.02); }
+.tm-original-input:disabled { opacity: 0.65; cursor: not-allowed; }
+
+.tm-original-locked-badge {
+    margin-left: auto;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
+/* ── Per-cue comment ──────────────────────────────── */
+.tm-comment-btn-has { color: var(--warning); }
+
+.tm-event-comment {
+    margin-top: 10px;
+    background: rgba(255,179,0,0.06);
+    border: 1px dashed rgba(255,179,0,0.4);
+    border-radius: 10px;
+    padding: 8px 12px;
+}
+
+.tm-event-comment .tm-col-label { color: var(--warning); }
+
+.tm-comment-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 0.82rem;
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    resize: vertical;
+    min-height: 40px;
+}

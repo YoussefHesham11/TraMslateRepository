@@ -1,0 +1,143 @@
+@model TraMslate.ViewModels.ProjectCardViewModel
+@using TraMslate.Models
+@{
+    var project = Model.Project;
+    var asRevisor = Model.ViewerRole == ProjectRole.Revisor;
+
+    string StatusLabel(ProjectStatus status) => status switch
+    {
+        ProjectStatus.InProgress => "In progress",
+        ProjectStatus.UnderReview => "With revisor",
+        ProjectStatus.ChangesRequested => "Revised",
+        _ => "Completed",
+    };
+
+    // "3 hours ago" reads better than a timestamp for work you were just doing,
+    // while anything older than a week is clearer as a date.
+    string LastEdited(DateTime when)
+    {
+        var span = DateTime.UtcNow - when;
+        if (span.TotalMinutes < 2) return "just now";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} min ago";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours} h ago";
+        if (span.TotalDays < 7) return $"{(int)span.TotalDays} d ago";
+        return when.ToString("MMM dd, yyyy");
+    }
+
+    // What this card's button should do depends on whose turn it is.
+    var (actionLabel, actionIcon) =
+        asRevisor
+            ? (project.Status == ProjectStatus.UnderReview ? ("Start revising", "bi-search")
+                                                           : ("Open", "bi-box-arrow-up-right"))
+        : project.Status == ProjectStatus.ChangesRequested ? ("See revisions", "bi-arrow-repeat")
+        : Model.CueCount == 0 ? ("Start translating", "bi-pencil-square")
+        : Model.IsFullyTranslated ? ("Review", "bi-check2-square")
+        : ("Continue", "bi-pencil-square");
+}
+
+<div class="tm-project-card @(asRevisor ? "tm-project-card-review" : "")"
+     data-search="@project.Title @project.SourceLanguage @project.TargetLanguage @(project.Description ?? "") @(Model.OwnerName ?? "")"
+     data-status="@project.Status">
+
+    <div class="tm-project-card-header">
+        <span class="tm-status tm-status-@project.Status.ToString().ToLower()">@StatusLabel(project.Status)</span>
+        <span class="tm-project-date" title="Last edited @project.UpdatedAt.ToString("f")">
+            <i class="bi bi-clock-history"></i> @LastEdited(project.UpdatedAt)
+        </span>
+    </div>
+
+    <h3 class="tm-project-title">@project.Title</h3>
+    <p class="tm-project-langs">
+        <i class="bi bi-translate"></i>
+        @project.SourceLanguage &rarr; @project.TargetLanguage
+        @if (string.IsNullOrEmpty(project.VideoPath))
+        {
+            <span class="tm-project-novideo" title="No video uploaded for this project">
+                <i class="bi bi-camera-video-off"></i> No video
+            </span>
+        }
+    </p>
+
+    @if (asRevisor)
+    {
+        <p class="tm-project-owner">
+            <i class="bi bi-person"></i> Translated by @Model.OwnerName
+        </p>
+    }
+    else if (!string.IsNullOrEmpty(project.Description))
+    {
+        <p class="tm-project-desc">@project.Description</p>
+    }
+
+    <div class="tm-project-progress">
+        @if (Model.CueCount == 0)
+        {
+            <p class="tm-project-progress-label tm-project-empty">
+                <i class="bi bi-inbox"></i>
+                @(asRevisor ? "Nothing to revise yet" : "No subtitles yet — import a script to begin")
+            </p>
+        }
+        else
+        {
+            <div class="tm-project-progress-label">
+                <span><strong>@Model.TranslatedCount.ToString("N0")</strong> of @Model.CueCount.ToString("N0") lines translated</span>
+                <span class="tm-project-percent @(Model.IsFullyTranslated ? "tm-project-percent-done" : "")">@Model.PercentTranslated%</span>
+            </div>
+            <div class="tm-progress-track" role="progressbar"
+                 aria-valuenow="@Model.PercentTranslated" aria-valuemin="0" aria-valuemax="100"
+                 aria-label="Translation progress for @project.Title">
+                <div class="tm-progress-fill @(Model.IsFullyTranslated ? "tm-progress-fill-done" : "")"
+                     style="width:@Model.PercentTranslated%"></div>
+            </div>
+
+            @if (Model.PendingSuggestionCount > 0 || Model.FlaggedCount > 0 || Model.NeedsReviewCount > 0 || Model.ApprovedCount > 0)
+            {
+                <p class="tm-project-flags">
+                    @if (Model.PendingSuggestionCount > 0)
+                    {
+                        <span class="tm-flag-suggestion" title="Suggestions from the revisor you have not decided on">
+                            <i class="bi bi-lightbulb-fill"></i> @Model.PendingSuggestionCount suggestion@(Model.PendingSuggestionCount == 1 ? "" : "s")
+                        </span>
+                    }
+                    @if (Model.FlaggedCount > 0)
+                    {
+                        <span class="tm-flag-flagged" title="Lines the revisor flagged">
+                            <i class="bi bi-exclamation-triangle-fill"></i> @Model.FlaggedCount flagged
+                        </span>
+                    }
+                    @if (Model.NeedsReviewCount > 0)
+                    {
+                        <span class="tm-flag-review"><i class="bi bi-flag-fill"></i> @Model.NeedsReviewCount for review</span>
+                    }
+                    @if (Model.ApprovedCount > 0)
+                    {
+                        <span class="tm-flag-approved"><i class="bi bi-patch-check-fill"></i> @Model.ApprovedCount approved</span>
+                    }
+                </p>
+            }
+        }
+    </div>
+
+    <div class="tm-project-actions">
+        <a asp-controller="Project" asp-action="Editor" asp-route-id="@project.Id" class="tm-btn tm-btn-primary">
+            <i class="bi @actionIcon"></i> @actionLabel
+        </a>
+        <a asp-controller="Review" asp-action="People" asp-route-id="@project.Id"
+           class="tm-btn-sm" title="People on this project and its revision history">
+            <i class="bi bi-people"></i>
+        </a>
+        @if (!asRevisor)
+        {
+            <button class="tm-btn-sm tm-delete-project-btn"
+                    data-id="@project.Id" data-title="@project.Title" title="Delete project"
+                    aria-label="Delete @project.Title">
+                <i class="bi bi-trash3"></i>
+            </button>
+            <form id="deleteForm-@project.Id"
+                  asp-controller="Dashboard" asp-action="Delete" asp-route-id="@project.Id"
+                  method="post" style="display:none;">
+                @Html.AntiForgeryToken()
+            </form>
+        }
+    </div>
+</div>
