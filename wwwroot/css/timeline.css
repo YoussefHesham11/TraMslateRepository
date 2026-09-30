@@ -2,20 +2,34 @@
 .tm-timeline-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    padding: 6px 14px;
+    gap: 10px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 5px 12px;
     background: var(--surface);
     border-top: 1px solid var(--border);
     flex-shrink: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
+
+.tm-timeline-toolbar::-webkit-scrollbar { height: 6px; }
+.tm-timeline-toolbar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.tm-timeline-toolbar::-webkit-scrollbar-track { background: transparent; }
 
 .tm-timeline-toolbar-group {
     display: flex;
     align-items: center;
     gap: 2px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    flex: none;
+}
+
+/* Groups read as blocks of related tools rather than one long row of icons. */
+.tm-timeline-toolbar-group + .tm-timeline-toolbar-group {
+    border-left: 1px solid var(--border);
+    padding-left: 10px;
 }
 
 .tm-timeline-toggle {
@@ -71,13 +85,18 @@
 /* The ruler + dialogue strip occupy the top 25px of the canvas (see
    drawTimecodeRuler/drawWaveform) — the block track starts below that so
    cue blocks never paint over the timecodes. */
+/* The cue blocks used to sit across the whole strip, so every block painted
+   over the part of the waveform it was meant to describe. They now have a
+   lane of their own along the bottom; the editor measures it and publishes
+   --tm-blocks-h so the canvas and this rule cannot disagree. */
 .tm-timeline-events {
-    --tm-ruler-h: 25px;
+    --tm-blocks-h: 48px;
     position: absolute;
-    top: var(--tm-ruler-h);
+    top: auto;
+    bottom: 0;
     left: 0;
     width: 100%;
-    height: calc(100% - var(--tm-ruler-h));
+    height: var(--tm-blocks-h);
     pointer-events: none;
     z-index: 2;
 }
@@ -86,8 +105,8 @@
     --tm-block-border: rgba(255,255,255,0.3);
     --tm-block-fill: rgba(255,255,255,0.09);
     position: absolute;
-    top: 6px;
-    height: calc(100% - 12px);
+    top: 4px;
+    height: calc(100% - 8px);
     min-width: 3px;
     background: var(--tm-block-fill);
     border: 1px solid var(--tm-block-border);
@@ -240,3 +259,196 @@
     resize: vertical;
     min-height: 40px;
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   Sound & timing controls
+   ══════════════════════════════════════════════════════════════════════ */
+
+.tm-tl-range {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+    flex: none;
+}
+
+.tm-tl-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+}
+
+.tm-tl-range::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+}
+
+.tm-tl-range:focus-visible { box-shadow: 0 0 0 2px rgba(226,0,26,0.4); }
+.tm-tl-range-vol { width: 74px; margin: 0 6px 0 2px; }
+
+/* ── Options popover ──────────────────────────────── */
+.tm-tl-menu-wrap { position: relative; display: inline-flex; }
+
+/* Opens upward: the control bar is the last thing above the timeline, so
+   there is never room below it. */
+.tm-tl-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 290px;
+    max-width: calc(100vw - 32px);
+    padding: 12px 14px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+    z-index: 60;
+}
+
+.tm-tl-menu[hidden] { display: none; }
+
+.tm-tl-menu-title {
+    margin: 10px 0 6px;
+    font-size: 0.63rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.tm-tl-menu-title:first-child { margin-top: 0; }
+
+.tm-tl-menu-row {
+    display: grid;
+    grid-template-columns: 62px 1fr 42px;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 0.76rem;
+    color: var(--text);
+}
+
+.tm-tl-menu-row .tm-tl-range { width: 100%; }
+.tm-tl-menu-row select { width: 100%; }
+.tm-tl-menu-row output {
+    font-size: 0.7rem;
+    font-family: 'Courier New', monospace;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.tm-tl-menu-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 7px;
+    font-size: 0.76rem;
+    color: var(--text);
+    cursor: pointer;
+    line-height: 1.35;
+}
+
+.tm-tl-menu-check input { accent-color: var(--accent); margin-top: 2px; cursor: pointer; }
+
+.tm-tl-menu-note {
+    margin: 0 0 8px;
+    font-size: 0.7rem;
+    line-height: 1.45;
+    color: var(--text-muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Timeline overlays
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* A faint guide under the pointer, so you can line an edit up against the
+   waveform before committing to a click. */
+.tm-timeline-hover {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(255,255,255,0.45);
+    pointer-events: none;
+    z-index: 4;
+    display: none;
+}
+
+.tm-timeline-wrap.tm-tl-hovering .tm-timeline-hover { display: block; }
+
+/* Timecode under the pointer plus whatever the current gesture is doing —
+   during a drag this is the only honest source for the new in/out time. */
+.tm-timeline-readout {
+    position: absolute;
+    top: 26px;
+    right: 8px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: rgba(10,10,12,0.9);
+    border: 1px solid var(--border);
+    font-family: 'Courier New', monospace;
+    font-size: 0.68rem;
+    color: var(--text);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 7;
+}
+
+.tm-timeline-readout[hidden] { display: none; }
+.tm-timeline-readout b { color: var(--accent); font-weight: 700; }
+
+/* Decoding a feature-length track takes real time; saying so beats an empty
+   strip that looks broken. */
+.tm-timeline-progress {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 18px;
+    border-radius: 10px;
+    background: rgba(10,10,12,0.92);
+    border: 1px solid var(--border);
+    pointer-events: none;
+    z-index: 8;
+}
+
+.tm-timeline-progress[hidden] { display: none; }
+
+.tm-timeline-progress-label { font-size: 0.74rem; color: var(--text); }
+
+.tm-timeline-progress-track {
+    width: 190px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    overflow: hidden;
+}
+
+.tm-timeline-progress-fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 0.2s linear;
+}
+
+/* The strip itself is a scrub surface; the pointer should say so. */
+.tm-timeline-scroll { cursor: text; }
+.tm-timeline-scroll:active { cursor: ew-resize; }

@@ -104,6 +104,13 @@
                    class="tm-icon-btn" title="People on this project and its revision history">
                     <i class="bi bi-people"></i>
                 </a>
+                @if ((bool)ViewBag.IsOwner)
+                {
+                    <a asp-controller="Project" asp-action="Settings" asp-route-id="@Model.Id"
+                       class="tm-icon-btn" title="Project settings — title, languages and video">
+                        <i class="bi bi-gear"></i>
+                    </a>
+                }
             }
         </div>
     </div>
@@ -224,6 +231,7 @@
                     <span class="tm-suggestion-count" id="suggestionCount" hidden></span>
                 </button>
                 <button class="tm-icon-btn-sm" id="btnSwapColumns" title="Swap original/translation columns"><i class="bi bi-arrow-left-right"></i></button>
+                <button class="tm-icon-btn-sm" id="btnExpandedView" title="Expand every cue into a full editing card" aria-pressed="false"><i class="bi bi-arrows-expand"></i></button>
                 <button class="tm-icon-btn-sm" id="btnCardLayout" title="Toggle side-by-side / stacked cue layout"><i class="bi bi-layout-split"></i></button>
                 <button class="tm-icon-btn-sm" id="btnToggleTools" title="Show/hide search, filters, and quick tools"><i class="bi bi-sliders"></i></button>
                 <button class="tm-btn-sm tm-btn-sm-primary" id="btnAddEvent" title="Add new subtitle line">
@@ -321,7 +329,7 @@
         <div class="tm-timeline-resize-grip"></div>
     </div>
     <div class="tm-timeline-toolbar">
-        <div class="tm-timeline-toolbar-group">
+        <div class="tm-timeline-toolbar-group" role="group" aria-label="Transport">
             <button class="tm-icon-btn-sm" id="tlRewind" title="Rewind 10 seconds"><i class="bi bi-rewind-fill"></i></button>
             <button class="tm-icon-btn-sm" id="tlPrevSub" title="Previous subtitle"><i class="bi bi-skip-start-fill"></i></button>
             <button class="tm-icon-btn-sm" id="tlPlayPause" title="Play / Pause (Space)"><i class="bi bi-play-fill"></i></button>
@@ -330,11 +338,73 @@
             <button class="tm-icon-btn-sm" id="tlFastForward" title="Fast-forward 10 seconds"><i class="bi bi-fast-forward-fill"></i></button>
             <span class="tm-tool-sep"></span>
             <button class="tm-icon-btn-sm" id="tlPlaySelected" title="Play only the selected cue's range"><i class="bi bi-play-circle"></i></button>
-            <label class="tm-timeline-toggle" title="Pause automatically at the selected cue's out-time">
-                <input type="checkbox" id="tlAutoPauseOut" /> Auto-pause
-            </label>
+            <button class="tm-icon-btn-sm" id="tlPlayPreroll" title="Play the selected cue with a short run-up and run-out, so you hear how it lands in context"><i class="bi bi-skip-backward-circle"></i></button>
+            <button class="tm-icon-btn-sm" id="tlLoop" title="Loop the selected cue's range until you stop it" aria-pressed="false"><i class="bi bi-arrow-repeat"></i></button>
         </div>
-        <div class="tm-timeline-toolbar-group">
+
+        <div class="tm-timeline-toolbar-group" role="group" aria-label="Sound">
+            <button class="tm-icon-btn-sm" id="tlMute" title="Mute / unmute"><i class="bi bi-volume-up-fill"></i></button>
+            <input type="range" class="tm-tl-range tm-tl-range-vol" id="tlVolume" min="0" max="100" value="100"
+                   title="Playback volume" aria-label="Playback volume" />
+            <select id="tlSpeed" class="tm-speed-select" title="Playback speed" aria-label="Playback speed">
+                <option value="0.25">0.25&times;</option>
+                <option value="0.5">0.5&times;</option>
+                <option value="0.75">0.75&times;</option>
+                <option value="1" selected>1&times;</option>
+                <option value="1.5">1.5&times;</option>
+                <option value="2">2&times;</option>
+            </select>
+            <span class="tm-tool-sep"></span>
+            <span class="tm-tl-menu-wrap">
+                <button class="tm-icon-btn-sm" id="tlAudioMenuBtn" title="Waveform and playback options"
+                        aria-haspopup="true" aria-expanded="false"><i class="bi bi-sliders"></i></button>
+                <div class="tm-tl-menu" id="tlAudioMenu" hidden>
+                    <p class="tm-tl-menu-title">Waveform</p>
+                    <label class="tm-tl-menu-row" for="tlGain">
+                        <span>Amplitude</span>
+                        <input type="range" class="tm-tl-range" id="tlGain" min="100" max="800" value="100"
+                               title="Scale the waveform vertically — useful for a quiet dialogue stem. Playback volume is unaffected." />
+                        <output id="tlGainOut">1.0&times;</output>
+                    </label>
+                    <label class="tm-tl-menu-row" for="tlWaveView">
+                        <span>Shape</span>
+                        <select id="tlWaveView" class="tm-speed-select">
+                            <option value="both" selected>Peaks + body</option>
+                            <option value="peak">Peaks only</option>
+                            <option value="rms">Loudness (RMS)</option>
+                            <option value="bars">Bars</option>
+                        </select>
+                    </label>
+                    <label class="tm-tl-menu-check">
+                        <input type="checkbox" id="tlShowSpeech" checked />
+                        <span>Shade detected dialogue</span>
+                    </label>
+                    <p class="tm-tl-menu-title">Playback</p>
+                    <label class="tm-tl-menu-check">
+                        <input type="checkbox" id="tlScrubAudio" />
+                        <span>Play audio while scrubbing the timeline</span>
+                    </label>
+                    <label class="tm-tl-menu-check">
+                        <input type="checkbox" id="tlAutoPauseOut" />
+                        <span>Auto-pause at the selected cue's out-time</span>
+                    </label>
+                    <label class="tm-tl-menu-row" for="tlPreroll">
+                        <span>Run-up</span>
+                        <input type="range" class="tm-tl-range" id="tlPreroll" min="0" max="5000" step="250" value="1500"
+                               title="How far before the cue the run-up play starts" />
+                        <output id="tlPrerollOut">1.5s</output>
+                    </label>
+                    <p class="tm-tl-menu-title">Analysis</p>
+                    <p class="tm-tl-menu-note" id="tlAudioInfo">No audio analysed yet.</p>
+                    <button type="button" class="tm-btn-sm" id="tlReanalyse">Re-analyse audio</button>
+                </div>
+            </span>
+        </div>
+
+        <div class="tm-timeline-toolbar-group" role="group" aria-label="Timing">
+            <button class="tm-icon-btn-sm" id="tlSetIn" title="Set the selected cue's in-time to the playhead"><i class="bi bi-box-arrow-in-right"></i></button>
+            <button class="tm-icon-btn-sm" id="tlSetOut" title="Set the selected cue's out-time to the playhead"><i class="bi bi-box-arrow-in-left"></i></button>
+            <span class="tm-tool-sep"></span>
             <button class="tm-icon-btn-sm" id="tlNudgeBack" title="Move selection slightly earlier"><i class="bi bi-arrow-left-short"></i></button>
             <button class="tm-icon-btn-sm" id="tlNudgeFwd" title="Move selection slightly later"><i class="bi bi-arrow-right-short"></i></button>
             <button class="tm-icon-btn-sm" id="tlShrink" title="Shorten duration"><i class="bi bi-dash-lg"></i></button>
@@ -347,14 +417,26 @@
                 <option value="500">500 ms</option>
             </select>
             <span class="tm-tool-sep"></span>
+            <button class="tm-icon-btn-sm" id="tlSplitHere" title="Split the selected cue at the playhead"><i class="bi bi-scissors"></i></button>
+            <button class="tm-icon-btn-sm" id="tlJoinNext" title="Join the selected cue with the one after it"><i class="bi bi-union"></i></button>
+            <button class="tm-icon-btn-sm" id="tlFitSpeech" title="Snap the selected cue to the dialogue the waveform found under it"><i class="bi bi-soundwave"></i></button>
+            <button class="tm-icon-btn-sm" id="tlPrevSpeech" title="Jump the playhead to the previous dialogue edge"><i class="bi bi-chevron-bar-left"></i></button>
+            <button class="tm-icon-btn-sm" id="tlNextSpeech" title="Jump the playhead to the next dialogue edge"><i class="bi bi-chevron-bar-right"></i></button>
+            <span class="tm-tool-sep"></span>
             <button class="tm-icon-btn-sm" id="tlDuplicate" title="Duplicate selected cue"><i class="bi bi-copy"></i></button>
             <button class="tm-icon-btn-sm" id="tlLock" title="Lock / unlock selected cue(s)"><i class="bi bi-unlock"></i></button>
             <label class="tm-timeline-toggle" title="Snap to the playhead, nearby cue edges, and frame boundaries while dragging">
                 <input type="checkbox" id="tlSnap" checked /> Snap
             </label>
-            <span class="tm-tool-sep"></span>
+            <label class="tm-timeline-toggle" title="Also snap dragged cue edges to where the dialogue starts and stops in the waveform">
+                <input type="checkbox" id="tlSnapAudio" checked /> Audio
+            </label>
+        </div>
+
+        <div class="tm-timeline-toolbar-group" role="group" aria-label="Zoom">
             <button class="tm-icon-btn-sm" id="tlZoomOut" title="Zoom out"><i class="bi bi-zoom-out"></i></button>
             <button class="tm-icon-btn-sm" id="tlZoomFit" title="Fit whole timeline to window"><i class="bi bi-arrows-angle-contract"></i></button>
+            <button class="tm-icon-btn-sm" id="tlZoomSel" title="Zoom to the selected cue"><i class="bi bi-bounding-box"></i></button>
             <button class="tm-icon-btn-sm" id="tlZoomIn" title="Zoom in"><i class="bi bi-zoom-in"></i></button>
         </div>
     </div>
@@ -402,10 +484,18 @@
         <div class="tm-timeline-scroll" id="timelineScroll">
             <div class="tm-timeline-inner" id="timelineInner">
                 <canvas id="waveformCanvas"></canvas>
+                <div class="tm-timeline-hover" id="timelineHover"></div>
                 <div class="tm-timeline-cursor" id="timelineCursor"></div>
                 <div class="tm-timeline-events" id="timelineEvents"></div>
                 <div class="tm-timeline-timecodes" id="timelineTimecodes"></div>
             </div>
+        </div>
+        <!-- Overlays: they float above the strip rather than taking layout
+             space, so the waveform keeps the full height the user gave it. -->
+        <div class="tm-timeline-readout" id="timelineReadout" hidden></div>
+        <div class="tm-timeline-progress" id="timelineProgress" hidden>
+            <span class="tm-timeline-progress-label" id="timelineProgressText">Analysing audio…</span>
+            <span class="tm-timeline-progress-track"><span class="tm-timeline-progress-fill" id="timelineProgressFill"></span></span>
         </div>
     </div>
 
@@ -422,6 +512,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script src="~/js/subtitle-core.js" asp-append-version="true"></script>
+<script src="~/js/waveform.js" asp-append-version="true"></script>
 <script src="~/js/shortcuts.js" asp-append-version="true"></script>
 <script src="~/js/editor.js" asp-append-version="true"></script>
 }

@@ -165,6 +165,11 @@ const timelineInner = document.getElementById('timelineInner');
 const timelineEvents= document.getElementById('timelineEvents');
 const saveStatus    = document.getElementById('saveStatus');
 const importScript  = document.getElementById('importScript');
+const timelineHover = document.getElementById('timelineHover');
+const timelineReadout = document.getElementById('timelineReadout');
+const tlProgress    = document.getElementById('timelineProgress');
+const tlProgressText= document.getElementById('timelineProgressText');
+const tlProgressFill= document.getElementById('timelineProgressFill');
 
 // ── Timeline state ──────────────────────────────────
 let pxPerSecond    = 100;
@@ -176,6 +181,43 @@ let selectedIds    = new Set();
 let lockedIds       = loadLocked();
 let dragState       = null;
 const MIN_PX_PER_SEC = 4, MAX_PX_PER_SEC = 1000, DEFAULT_PX_PER_SEC = 100, SNAP_PX = 8, MIN_CUE_DUR = 0.12;
+
+// ── Waveform & audio state ──────────────────────────
+// `peaks` is the analysis from TmWaveform: a pyramid of min/max/RMS buckets
+// plus the speech regions detected from it. Everything the timeline draws
+// below the ruler, and every "snap to the dialogue" action, reads from here.
+let peaks          = null;
+let peaksStatus    = 'idle';   // idle | working | ready | failed
+let peaksMessage   = '';
+let waveGain       = 1;        // vertical scale only — never touches playback
+let waveView       = 'both';   // both | peak | rms | bars
+let showSpeech     = true;
+let snapToAudio    = true;
+let scrubAudio     = false;
+let loopRange      = null;     // {start, end} while the loop button is armed
+let prerollSecs    = 1.5;
+let hoverSecs      = null;
+let scrubbing      = false;
+let wasPlayingBeforeScrub = false;
+
+// The strip divides into three lanes: a timecode ruler, the waveform, and a
+// lane of cue blocks along the bottom. The blocks used to be drawn across
+// the whole strip, which put every cue on top of the audio it described.
+const RULER_H = 22, SPEECH_STRIP_H = 5;
+
+const TL_PREFS_KEY = 'tm-timeline-prefs';
+function loadTimelinePrefs() {
+    try { return JSON.parse(localStorage.getItem(TL_PREFS_KEY) || '{}'); }
+    catch { return {}; }
+}
+function saveTimelinePrefs() {
+    try {
+        localStorage.setItem(TL_PREFS_KEY, JSON.stringify({
+            waveGain, waveView, showSpeech, snapToAudio, scrubAudio, prerollSecs,
+            volume: video ? video.volume : 1, muted: video ? video.muted : false,
+        }));
+    } catch { /* storage unavailable */ }
+}
 
 function loadLocked() {
     try { return new Set(JSON.parse(localStorage.getItem(`tm-locked-${PROJECT_ID}`) || '[]')); }
@@ -280,6 +322,15 @@ if (video) {
         updateOverlay();
         updateCursor();
         highlightActiveEvent();
+        // The waveform tints everything behind the playhead as played, so it
+        // has to be repainted as the playhead moves. Redrawing reads only the
+        // visible pixel columns out of the peak pyramid, so this is cheap.
+        scheduleRulerRedraw();
+
+        // Loop the armed range rather than running past it.
+        if (loopRange && video.currentTime >= loopRange.end) {
+            video.currentTime = loopRange.start;
+        }
 
         // One-shot "play selected range" stop point.
         if (playingRangeEnd != null && video.currentTime >= playingRangeEnd) {
@@ -307,12 +358,10 @@ if (video) {
     btnFrameFwd.addEventListener('click',  () => stepFrame(1));
     speedSelect.addEventListener('change', () => video.playbackRate = parseFloat(speedSelect.value));
 
-    // Click on timeline to seek
-    canvas.addEventListener('click', e => {
-        if (!video.duration || dragState) return;
-        const rect = canvas.getBoundingClientRect();
-        video.currentTime = Math.min(Math.max((e.clientX - rect.left) / pxPerSecond, 0), video.duration);
-    });
+    // Seeking and scrubbing live in wireTimelineSurface(); the old handler
+    // here measured from the canvas alone, which is pinned to the left of the
+    // viewport, so every click landed at the wrong time once the strip was
+    // scrolled.
 
     // Draw waveform placeholder bars on timeline. Default to a zoom level
     // where a typical cue is comfortably readable rather than fitting the
@@ -352,6 +401,7 @@ function markOutPoint() {
 }
 
 function deleteSelectedCue() {
+    if (!translatorOnly()) return;
     const targets = selectionTargets();
     if (!targets.length) return;
     events = events.filter(x => !targets.includes(x.id));
@@ -415,6 +465,134 @@ function playSelectedRange() {
     video.play();
 }
 
+/* Plays the selected cue with a run-up and run-out. Timing a cue by ear
+   means hearing the line arrive, not starting mid-word on its in-point. */
+function playWithPreroll() {
+    const ev = events.find(x => x.id === activeId);
+    if (!ev || !video) { alert('Select a cue first.'); return; }
+    video.currentTime = Math.max(0, tcToSecs(ev.startTime) - prerollSecs);
+    playingRangeEnd = tcToSecs(ev.endTime) + prerollSecs;
+    video.play();
+}
+
+function toggleLoopSelected() {
+    const btn = document.getElementById('tlLoop');
+    if (loopRange) {
+        loopRange = null;
+        btn?.classList.remove('tm-toggle-on');
+        btn?.setAttribute('aria-pressed', 'false');
+        drawTimelineRuler();
+        return;
+    }
+    const ev = events.find(x => x.id === activeId);
+    if (!ev || !video) { alert('Select a cue to loop.'); return; }
+    loopRange = { start: tcToSecs(ev.startTime), end: tcToSecs(ev.endTime) };
+    playingRangeEnd = null;
+    btn?.classList.add('tm-toggle-on');
+    btn?.setAttribute('aria-pressed', 'true');
+    video.currentTime = loopRange.start;
+    video.play();
+    drawTimelineRuler();
+}
+
+/* Pulls the selected cue onto the dialogue the analysis found underneath it.
+   This is the edit a timing pass otherwise spends its whole day doing by
+   hand, one edge at a time. */
+function fitSelectedToSpeech() {
+    const targets = selectionTargets();
+    if (!targets.length) { alert('Select a cue first.'); return; }
+    if (peaksStatus !== 'ready') { alert('The audio has not been analysed yet, so there is no dialogue to snap to.'); return; }
+    let fitted = 0;
+    targets.forEach(id => {
+        const ev = events.find(x => x.id === id);
+        const region = TmWaveform.regionForRange(peaks, tcToSecs(ev.startTime), tcToSecs(ev.endTime));
+        if (!region || region.end - region.start < MIN_CUE_DUR) return;
+        ev.startTime = secsToSrtTc(region.start);
+        ev.endTime   = secsToSrtTc(region.end);
+        fitted++;
+    });
+    if (!fitted) { alert('No dialogue was detected near the selected cue.'); return; }
+    markDirty(); renderEvents(); renderTimelineBlocks(); drawTimelineRuler();
+}
+
+function jumpToSpeechEdge(direction) {
+    if (!video) return;
+    if (peaksStatus !== 'ready') { alert('The audio has not been analysed yet.'); return; }
+    const edge = TmWaveform.stepEdge(peaks, video.currentTime, direction);
+    if (edge == null) { alert(direction > 0 ? 'No further dialogue in this track.' : 'No earlier dialogue in this track.'); return; }
+    seekTo(edge);
+    keepPlayheadVisible();
+    drawTimelineRuler();
+}
+
+/* Splits at the playhead rather than at the text caret (which splitAtCaret
+   does) — the natural gesture when you are working by ear. */
+function splitAtPlayhead() {
+    if (!translatorOnly()) return;
+    if (!loaded || !video) return;
+    const idx = events.findIndex(ev => ev.id === activeId);
+    if (idx === -1) { alert('Select a cue first.'); return; }
+    const cue = events[idx];
+    const at = video.currentTime;
+    if (at <= tcToSecs(cue.startTime) + MIN_CUE_DUR || at >= tcToSecs(cue.endTime) - MIN_CUE_DUR) {
+        alert('Move the playhead inside the selected cue, far enough from either edge to leave two usable cues.');
+        return;
+    }
+    try {
+        const [a, b] = SubtitleCore.splitCue(cue, at);
+        events.splice(idx, 1, { ...a, id: cue.id }, { ...b, id: nextTempId-- });
+        activeId = cue.id;
+        selectedIds = new Set([activeId]);
+        markDirty(); renderEvents(); renderTimelineBlocks(); drawTimelineRuler();
+    } catch (error) { alert(error.message); }
+}
+
+function joinWithNext() {
+    if (!translatorOnly()) return;
+    if (!loaded) return;
+    const idx = events.findIndex(ev => ev.id === activeId);
+    if (idx === -1 || idx >= events.length - 1) { alert('Select a cue that has a next cue to join with.'); return; }
+    const merged = SubtitleCore.mergeCues(events[idx], events[idx + 1]);
+    events.splice(idx, 2, {
+        ...merged,
+        id: events[idx].id,
+        originalLocked: events[idx].originalLocked || events[idx + 1].originalLocked,
+    });
+    activeId = events[idx].id;
+    selectedIds = new Set([activeId]);
+    markDirty(); renderEvents(); renderTimelineBlocks(); drawTimelineRuler();
+}
+
+/* Frames the selected cue with a little air either side, so its edges and
+   the audio around them are both visible. */
+function zoomToSelection() {
+    const ev = events.find(x => x.id === activeId);
+    if (!ev) { alert('Select a cue first.'); return; }
+    const start = tcToSecs(ev.startTime), end = tcToSecs(ev.endTime);
+    const span = Math.max(end - start, MIN_CUE_DUR) * 2.2;
+    const width = timelineScroll?.clientWidth || 800;
+    setZoom(width / span, (start + end) / 2);
+}
+
+function setVolume(fraction) {
+    if (!video) return;
+    video.volume = Math.max(0, Math.min(1, fraction));
+    if (video.volume > 0) video.muted = false;
+    paintVolumeButton();
+    saveTimelinePrefs();
+}
+
+function paintVolumeButton() {
+    const btn = document.getElementById('tlMute');
+    if (!btn || !video) return;
+    const icon = video.muted || video.volume === 0 ? 'bi-volume-mute-fill'
+        : video.volume < 0.5 ? 'bi-volume-down-fill'
+        : 'bi-volume-up-fill';
+    btn.innerHTML = `<i class="bi ${icon}"></i>`;
+    btn.classList.toggle('tm-toggle-on', video.muted);
+    btn.title = video.muted ? 'Unmute' : 'Mute';
+}
+
 function nudgeStepAmount() {
     const raw = document.getElementById('tlNudgeStep')?.value ?? '50';
     return raw === 'frame' ? 1 / fps : Number(raw) / 1000;
@@ -452,6 +630,7 @@ function resizeDurationSelected(direction) {
 }
 
 function duplicateSelectedCue() {
+    if (!translatorOnly()) return;
     const ev = events.find(x => x.id === activeId);
     if (!ev) { alert('Select a cue first.'); return; }
     const dur = tcToSecs(ev.endTime) - tcToSecs(ev.startTime);
@@ -531,6 +710,7 @@ function seekToNextEnd() {
 }
 
 function mergeWithPrevious() {
+    if (!translatorOnly()) return;
     if (!loaded) return;
     const idx = events.findIndex(ev => ev.id === activeId);
     if (idx <= 0) { alert('Select a cue that has a previous cue to merge with.'); return; }
@@ -559,6 +739,7 @@ function linkToNext() {
 // Splits the active cue at the text caret position (proportionally, by
 // character offset) instead of at the video playhead like the toolbar split.
 function splitAtCaret(snapToFrame) {
+    if (!translatorOnly()) return;
     if (!loaded) return;
     const idx = events.findIndex(ev => ev.id === activeId);
     if (idx === -1) { alert('Select a cue first.'); return; }
@@ -589,6 +770,21 @@ function findAdjacentMatch(direction) {
     const next = matches[(idx + direction + matches.length) % matches.length];
     selectEvent(next.id, { scrollBlock: 'center', focusTranslation: true });
     if (video) video.currentTime = tcToSecs(next.startTime);
+}
+
+// The shape of the track and the wording of each line belong to the
+// translator. A revisor adjusts timing and proposes wording in their own
+// column; anything else is refused here, and by the server, rather than
+// letting the revisor make changes that would silently not be saved.
+function translatorOnly() {
+    if (typeof CAN_EDIT_TRANSLATION === 'undefined' || CAN_EDIT_TRANSLATION) return true;
+    alert('Only the translator can add, split, merge, delete or reword lines. Put your change in the suggestion column instead.');
+    return false;
+}
+
+if (typeof CAN_EDIT_TRANSLATION !== 'undefined' && !CAN_EDIT_TRANSLATION) {
+    ['btnAddEvent', 'btnSplitCue', 'btnMergeCue', 'tlDuplicate', 'copySource', 'replaceAll']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.hidden = true; });
 }
 
 function toggleEventsPanel() { document.querySelector('.tm-editor-body')?.classList.toggle('tm-panel-collapsed'); }
@@ -630,7 +826,7 @@ Shortcuts.on('shiftFromSelected', () => document.getElementById('shiftFromHere')
 Shortcuts.on('zeroOutTiming',     () => document.getElementById('shiftZero').click());
 
 Shortcuts.on('save', () => { clearTimeout(autoSaveTimer); doSave(); });
-Shortcuts.on('importScript', () => importScript.click());
+Shortcuts.on('importScript', () => importScript?.click());
 Shortcuts.on('exportSrt', () => btnExportSrt.click());
 Shortcuts.on('exportVtt', () => btnExportVtt.click());
 Shortcuts.on('addLine', () => btnAddEvent.click());
@@ -771,20 +967,50 @@ function scrollBlockIntoView(id, center = false) {
 // timelineInner div (and the cue blocks inside it) still spans the whole
 // duration since plain positioned divs don't have that limit, so scrolling
 // still works over the full track.
+function laneMetrics(H) {
+    const strip = showSpeech ? SPEECH_STRIP_H : 0;
+    const top = RULER_H + strip;
+    // The block lane takes about a third of what is left, bounded so it stays
+    // legible on a tall strip and does not swallow a short one.
+    const blocks = Math.round(Math.min(58, Math.max(24, (H - top) * 0.32)));
+    const waveH = Math.max(16, H - top - blocks);
+    return { strip, top, blocks, waveH, mid: top + waveH / 2, bottom: top + waveH };
+}
+
+// The canvas only ever renders the currently-scrolled-into-view time window
+// (viewport-sized, "sticky" to the left of the scroll container) instead of
+// the whole video duration — a 2-hour movie at a readable zoom would need a
+// canvas millions of pixels wide, past what browsers allow. The much wider
+// timelineInner div (and the cue blocks inside it) still spans the whole
+// duration since plain positioned divs don't have that limit, so scrolling
+// still works over the full track.
 function drawTimelineRuler() {
     if (!canvas || !timelineSpan()) return;
     const innerW = Math.max(timelineSpan() * pxPerSecond, timelineScroll.clientWidth);
     timelineInner.style.width = innerW + 'px';
 
     // The drawn strip matches the scroll container's content box exactly, so
-    // the canvas covers the visible window and no more.
+    // the canvas covers the visible window and no more. Backing it with the
+    // device pixel ratio keeps the waveform and the timecodes crisp on the
+    // high-DPI screens most of this work happens on.
     const W = timelineScroll.clientWidth || innerW;
     const H = timelineScroll.clientHeight || timelineWrap.offsetHeight;
-    canvas.width  = W;
-    canvas.height = H;
-    const originSecs = timelineScroll.scrollLeft / pxPerSecond;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+        canvas.width  = Math.round(W * dpr);
+        canvas.height = Math.round(H * dpr);
+    }
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
 
+    const lanes = laneMetrics(H);
+    // Publish the lane height so the block elements, which are plain DOM and
+    // sized by CSS, cannot drift out of step with what the canvas drew.
+    timelineEvents?.style.setProperty('--tm-blocks-h', lanes.blocks + 'px');
+
+    const originSecs = timelineScroll.scrollLeft / pxPerSecond;
     const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
     const grad = ctx.createLinearGradient(0, 0, 0, H);
@@ -793,11 +1019,16 @@ function drawTimelineRuler() {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
-    drawTimecodeRuler(ctx, W, H, originSecs);
+    // The block lane reads as a shelf under the audio rather than a second
+    // thing floating in the same space.
+    ctx.fillStyle = 'rgba(255,255,255,0.035)';
+    ctx.fillRect(0, H - lanes.blocks, W, lanes.blocks);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(0, H - lanes.blocks, W, 1);
 
-    if (video?.src || video?.currentSrc) {
-        drawWaveform(ctx, W, H, originSecs);
-    }
+    drawTimecodeRuler(ctx, W, H, originSecs);
+    drawWaveform(ctx, W, H, originSecs, lanes);
+    drawLoopBand(ctx, W, H, originSecs, lanes);
 }
 
 // Picks a "nice" tick spacing (seconds) so labeled ticks land at least
@@ -817,7 +1048,26 @@ function drawTimecodeRuler(ctx, W, H, originSecs) {
 
     // Ruler background
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.fillRect(0, 0, W, 20);
+    ctx.fillRect(0, 0, W, RULER_H);
+
+    // Minor ticks between the labelled ones give the eye something to
+    // measure against without crowding the numbers.
+    const minor = interval / 5;
+    if (minor * pxPerSecond >= 7) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const firstMinor = Math.max(0, Math.floor(originSecs / minor));
+        const lastMinor = Math.min(Math.ceil((originSecs + W / pxPerSecond) / minor), firstMinor + Math.ceil(W / 7) + 4);
+        for (let n = firstMinor; n <= lastMinor; n++) {
+            const t = n * minor;
+            if (t > dur) break;
+            const x = Math.round((t - originSecs) * pxPerSecond) + 0.5;
+            ctx.moveTo(x, RULER_H - 5);
+            ctx.lineTo(x, RULER_H);
+        }
+        ctx.stroke();
+    }
 
     const firstN = Math.max(0, Math.floor(originSecs / interval) - 1);
     if (!Number.isFinite(firstN) || !Number.isFinite(interval) || interval <= 0) return;
@@ -834,8 +1084,8 @@ function drawTimecodeRuler(ctx, W, H, originSecs) {
         ctx.beginPath();
         ctx.strokeStyle = 'rgba(255,255,255,0.55)';
         ctx.lineWidth = 1;
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, 20);
+        ctx.moveTo(Math.round(x) + 0.5, 0);
+        ctx.lineTo(Math.round(x) + 0.5, RULER_H);
         ctx.stroke();
 
         const { hms, f } = secsToHMSF(t);
@@ -852,89 +1102,365 @@ function drawTimecodeRuler(ctx, W, H, originSecs) {
         const endFrame = Math.ceil((originSecs + W / pxPerSecond) / frameLen) + 1;
         ctx.strokeStyle = 'rgba(255,255,255,0.3)';
         ctx.lineWidth = 1;
+        ctx.beginPath();
         for (let f = startFrame; f <= endFrame; f++) {
             if (f % Math.round(fps) === 0) continue; // whole seconds already drawn above
             const t = f * frameLen;
             if (t > dur) break;
-            const x = (t - originSecs) * pxPerSecond;
-            ctx.beginPath();
-            ctx.moveTo(x, 15);
-            ctx.lineTo(x, 20);
-            ctx.stroke();
+            const x = Math.round((t - originSecs) * pxPerSecond) + 0.5;
+            ctx.moveTo(x, RULER_H - 6);
+            ctx.lineTo(x, RULER_H);
         }
+        ctx.stroke();
     }
 
     // Bottom border on ruler
     ctx.beginPath();
     ctx.strokeStyle = 'rgba(255,255,255,0.15)';
     ctx.lineWidth   = 1;
-    ctx.moveTo(0, 20);
-    ctx.lineTo(W, 20);
+    ctx.moveTo(0, RULER_H + 0.5);
+    ctx.lineTo(W, RULER_H + 0.5);
     ctx.stroke();
 }
 
-let audioDataPromise;
-async function drawWaveform(ctx, W, H, originSecs) {
-    try {
-        const data = await (audioDataPromise ||= decodeAudio());
-        if (canvas.width !== W) return; // a newer draw already took over
-        const dur = video.duration || 1;
-        const samplesPerSecond = data.length / dur;
-        const midY   = H / 2;
-        const rulerH = 25; // ruler (20px) + dialogue/silence strip (4px) below it
-        const amp    = (midY - rulerH - 4) * 0.95;
-        const playedX = (video.currentTime - originSecs) * pxPerSecond;
+/* Draws the audio. Reading from the peak pyramid means one pass over the
+   visible pixels rather than over the samples behind them, so this costs the
+   same on a thirty-second clip and on a three-hour feature. */
+function drawWaveform(ctx, W, H, originSecs, lanes) {
+    if (peaksStatus !== 'ready' || !peaks) {
+        drawWaveformPlaceholder(ctx, W, H, lanes);
+        return;
+    }
 
-        const SILENCE_THRESHOLD = 0.02;
-        for (let x = 0; x < W; x++) {
-            const t0 = originSecs + x / pxPerSecond;
-            const i0 = Math.max(0, Math.floor(t0 * samplesPerSecond));
-            const i1 = Math.max(i0 + 1, Math.floor((t0 + 1 / pxPerSecond) * samplesPerSecond));
-            let peak = 0;
-            for (let j = i0; j < i1 && j < data.length; j++) {
-                const v = Math.abs(data[j]);
-                if (v > peak) peak = v;
-            }
-            const h = Math.max(peak * amp, 1);
-            ctx.strokeStyle = x < playedX
-                ? 'rgba(255,255,255,0.95)'
-                : 'rgba(255, 212, 0, 0.85)';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(x, midY - h);
-            ctx.lineTo(x, midY + h);
-            ctx.stroke();
+    const cols = TmWaveform.columnsFor(peaks, originSecs, pxPerSecond, Math.ceil(W));
+    const amp = (lanes.waveH / 2 - 2) * waveGain;
+    const mid = lanes.mid;
+    const playX = (video ? video.currentTime - originSecs : -1) * pxPerSecond;
 
-            // Thin dialogue/silence strip just under the timecode ruler,
-            // using this same per-column peak (no extra pass over the samples).
-            ctx.fillStyle = peak < SILENCE_THRESHOLD ? 'rgba(0,0,0,0.5)' : 'rgba(255,212,0,0.25)';
-            ctx.fillRect(x, 21, 1, 4);
+    if (showSpeech) drawSpeechStrip(ctx, W, originSecs, lanes);
+
+    // A cue's own span is tinted behind the wave, so you can see at a glance
+    // whether its edges actually bracket the dialogue.
+    drawSelectionBand(ctx, W, originSecs, lanes);
+
+    const clampY = y => Math.max(lanes.top + 1, Math.min(lanes.bottom - 1, y));
+    const played = 'rgba(255,255,255,0.92)';
+    const ahead = 'rgba(255,212,0,0.88)';
+    const bodyPlayed = 'rgba(255,255,255,0.45)';
+    const bodyAhead = 'rgba(255,170,0,0.45)';
+
+    if (waveView === 'bars') {
+        // Deliberately gappy: at close zoom the gaps make individual
+        // syllables countable, which is what in-point work needs.
+        for (let x = 0; x < W; x += 2) {
+            const h = Math.min(lanes.waveH / 2 - 2, Math.max(cols.rms[x] * amp * 1.6, 0.5));
+            ctx.fillStyle = x < playX ? played : ahead;
+            ctx.fillRect(x, mid - h, 1.4, h * 2);
         }
+    } else {
+        // Peaks first as a filled envelope, then the RMS body inside it: the
+        // envelope shows where sound exists at all, the body where it is
+        // loud enough to be speech.
+        if (waveView !== 'rms') {
+            for (const ahead_ of [false, true]) {
+                const from = ahead_ ? Math.max(0, Math.ceil(playX)) : 0;
+                const to = ahead_ ? W : Math.min(W, Math.max(0, Math.ceil(playX)));
+                if (to <= from) continue;
+                ctx.fillStyle = ahead_ ? ahead : played;
+                ctx.beginPath();
+                ctx.moveTo(from, clampY(mid - cols.max[from] * amp));
+                for (let x = from + 1; x < to; x++) ctx.lineTo(x, clampY(mid - cols.max[x] * amp));
+                for (let x = to - 1; x >= from; x--) ctx.lineTo(x, clampY(mid - cols.min[x] * amp));
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+        if (waveView !== 'peak') {
+            for (const ahead_ of [false, true]) {
+                const from = ahead_ ? Math.max(0, Math.ceil(playX)) : 0;
+                const to = ahead_ ? W : Math.min(W, Math.max(0, Math.ceil(playX)));
+                if (to <= from) continue;
+                ctx.fillStyle = waveView === 'rms' ? (ahead_ ? ahead : played) : (ahead_ ? bodyAhead : bodyPlayed);
+                ctx.beginPath();
+                ctx.moveTo(from, clampY(mid - cols.rms[from] * amp * 1.5));
+                for (let x = from + 1; x < to; x++) ctx.lineTo(x, clampY(mid - cols.rms[x] * amp * 1.5));
+                for (let x = to - 1; x >= from; x--) ctx.lineTo(x, clampY(mid + cols.rms[x] * amp * 1.5));
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+    }
 
-        // Center axis
-        ctx.beginPath();
-        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-        ctx.lineWidth   = 1;
-        ctx.setLineDash([3, 6]);
-        ctx.moveTo(0, midY);
-        ctx.lineTo(W, midY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        // The playhead itself is the separate #timelineCursor div (always
-        // pixel-accurate via normal scrolling); no need to draw it here too.
-    } catch (e) {
-        drawFallbackWaveform(ctx, W, H);
+    // Centre axis, plus a flat line wherever the analysis has no data (past
+    // the end of the audio, typically) so the lane never looks merely blank.
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 6]);
+    ctx.moveTo(0, mid + 0.5);
+    ctx.lineTo(W, mid + 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // The playhead itself is the separate #timelineCursor div (always
+    // pixel-accurate via normal scrolling); no need to draw it here too.
+}
+
+/* The thin band under the ruler marking where the analysis heard dialogue.
+   It is the cheapest possible answer to "is there anything to subtitle
+   here?" while scanning a long stretch at low zoom. */
+function drawSpeechStrip(ctx, W, originSecs, lanes) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, RULER_H + 1, W, SPEECH_STRIP_H - 1);
+    ctx.fillStyle = 'rgba(80,220,255,0.75)';
+    for (const r of peaks.speech) {
+        const x0 = (r.start - originSecs) * pxPerSecond;
+        const x1 = (r.end - originSecs) * pxPerSecond;
+        if (x1 < 0) continue;
+        if (x0 > W) break;
+        ctx.fillRect(Math.max(0, x0), RULER_H + 1, Math.max(1, Math.min(W, x1) - Math.max(0, x0)), SPEECH_STRIP_H - 1);
+    }
+    // And a very faint wash behind the wave itself, at zoom levels where a
+    // 5px strip is too coarse to line an edit up against.
+    if (pxPerSecond > 40) {
+        ctx.fillStyle = 'rgba(80,220,255,0.06)';
+        for (const r of peaks.speech) {
+            const x0 = (r.start - originSecs) * pxPerSecond;
+            const x1 = (r.end - originSecs) * pxPerSecond;
+            if (x1 < 0) continue;
+            if (x0 > W) break;
+            ctx.fillRect(Math.max(0, x0), lanes.top, Math.min(W, x1) - Math.max(0, x0), lanes.waveH);
+        }
     }
 }
 
-function drawFallbackWaveform(ctx, W, H) {
-    // Sits just under the ruler rather than across the middle, where it would
-    // print over the cue blocks.
-    ctx.fillStyle = 'rgba(154,154,165,0.75)';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('Audio waveform unavailable — use the timeline to seek', 14, 38);
+function drawSelectionBand(ctx, W, originSecs, lanes) {
+    const ev = events.find(x => x.id === activeId);
+    if (!ev) return;
+    const x0 = (tcToSecs(ev.startTime) - originSecs) * pxPerSecond;
+    const x1 = (tcToSecs(ev.endTime) - originSecs) * pxPerSecond;
+    if (x1 < 0 || x0 > W) return;
+    ctx.fillStyle = 'rgba(226,0,26,0.14)';
+    ctx.fillRect(x0, lanes.top, x1 - x0, lanes.waveH);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(x0) + 0.5, lanes.top);
+    ctx.lineTo(Math.round(x0) + 0.5, lanes.bottom);
+    ctx.moveTo(Math.round(x1) + 0.5, lanes.top);
+    ctx.lineTo(Math.round(x1) + 0.5, lanes.bottom);
+    ctx.stroke();
 }
+
+function drawLoopBand(ctx, W, H, originSecs, lanes) {
+    if (!loopRange) return;
+    const x0 = (loopRange.start - originSecs) * pxPerSecond;
+    const x1 = (loopRange.end - originSecs) * pxPerSecond;
+    if (x1 < 0 || x0 > W) return;
+    ctx.fillStyle = 'rgba(80,220,255,0.10)';
+    ctx.fillRect(x0, 0, x1 - x0, RULER_H);
+    ctx.fillStyle = 'rgba(80,220,255,0.9)';
+    ctx.fillRect(Math.max(0, x0), 0, 2, RULER_H);
+    ctx.fillRect(Math.min(W - 2, x1 - 2), 0, 2, RULER_H);
+}
+
+/* What the audio lane says before (or instead of) a waveform: a progress
+   note while the track is being read, and a plain reason when it cannot be. */
+function drawWaveformPlaceholder(ctx, W, H, lanes) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 6]);
+    ctx.beginPath();
+    ctx.moveTo(0, lanes.mid + 0.5);
+    ctx.lineTo(W, lanes.mid + 0.5);
+    ctx.stroke();
+    ctx.restore();
+
+    const msg = peaksStatus === 'working' ? ''
+        : peaksStatus === 'failed' ? (peaksMessage || 'Audio could not be analysed')
+        : video?.currentSrc || video?.src ? 'Reading the audio\u2026'
+        : 'No video in this project — the ruler and cue blocks still work';
+    if (!msg) return;
+    ctx.fillStyle = 'rgba(154,154,165,0.8)';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(msg, W / 2, lanes.mid + 4);
+}
+
+/* ══════════════════════════════════════════════════
+   AUDIO ANALYSIS
+   ══════════════════════════════════════════════════ */
+
+function setAnalysisProgress(stage, frac) {
+    if (!tlProgress) return;
+    tlProgress.hidden = false;
+    const label = stage === 'download' ? 'Reading the media'
+        : stage === 'decode' ? 'Decoding audio'
+        : 'Measuring the waveform';
+    tlProgressText.textContent = label + '\u2026';
+    // Downloading is the long part on a feature-length file, so it gets most
+    // of the bar rather than a third of it.
+    const overall = stage === 'download' ? frac * 0.7
+        : stage === 'decode' ? 0.7 + frac * 0.15
+        : 0.85 + frac * 0.15;
+    tlProgressFill.style.width = Math.round(overall * 100) + '%';
+}
+
+function describeAnalysis() {
+    const info = document.getElementById('tlAudioInfo');
+    if (!info) return;
+    if (peaksStatus === 'ready') {
+        const speech = peaks.speech.reduce((n, r) => n + (r.end - r.start), 0);
+        const pct = peaks.duration ? Math.round(speech / peaks.duration * 100) : 0;
+        info.textContent = `${peaks.speech.length} dialogue regions over `
+            + `${Math.round(peaks.duration)}s (${pct}% of the track).`
+            + (peaks.fromCache ? ' Loaded from this browser\u2019s cache.' : '');
+    } else if (peaksStatus === 'working') {
+        info.textContent = 'Analysing\u2026';
+    } else if (peaksStatus === 'failed') {
+        info.textContent = peaksMessage || 'Analysis failed.';
+    } else {
+        info.textContent = 'No audio analysed yet.';
+    }
+}
+
+function waveformCacheKey() {
+    const src = video?.currentSrc || video?.src || '';
+    return src ? `p${PROJECT_ID}|${src}` : null;
+}
+
+let analysisRun = 0;
+async function loadWaveform({ force = false } = {}) {
+    if (!video || !(video.currentSrc || video.src)) return;
+    if (peaksStatus === 'working') return;
+    const run = ++analysisRun;
+    const key = waveformCacheKey();
+    if (force && key) await TmWaveform.forget(key);
+
+    peaksStatus = 'working';
+    peaksMessage = '';
+    describeAnalysis();
+    setAnalysisProgress('download', 0);
+    drawTimelineRuler();
+
+    try {
+        const result = await TmWaveform.analyse(video.currentSrc || video.src, {
+            cacheKey: key,
+            onProgress: (stage, frac) => { if (run === analysisRun) setAnalysisProgress(stage, frac); },
+        });
+        if (run !== analysisRun) return;   // a re-analysis overtook this one
+        peaks = result;
+        peaksStatus = 'ready';
+    } catch (err) {
+        if (run !== analysisRun) return;
+        peaks = null;
+        peaksStatus = 'failed';
+        peaksMessage = (err && err.message) || 'Audio could not be analysed';
+    } finally {
+        if (run === analysisRun && tlProgress) tlProgress.hidden = true;
+    }
+    describeAnalysis();
+    drawTimelineRuler();
+}
+
+/* ══════════════════════════════════════════════════
+   TIMELINE SURFACE: scrub, hover, wheel-zoom
+   ══════════════════════════════════════════════════ */
+
+function timeAtClientX(clientX) {
+    const rect = timelineScroll.getBoundingClientRect();
+    const t = (timelineScroll.scrollLeft + clientX - rect.left) / pxPerSecond;
+    return Math.max(0, Math.min(t, timelineSpan() || t));
+}
+
+function showReadout(html) {
+    if (!timelineReadout) return;
+    timelineReadout.innerHTML = html;
+    timelineReadout.hidden = false;
+}
+function hideReadout() { if (timelineReadout) timelineReadout.hidden = true; }
+
+function tcLabel(secs) {
+    const { hms, f } = secsToHMSF(secs);
+    return `${hms}:${f}`;
+}
+
+function seekTo(secs) {
+    if (!video || !Number.isFinite(video.duration)) return;
+    video.currentTime = Math.max(0, Math.min(secs, video.duration));
+}
+
+function wireTimelineSurface() {
+    if (!timelineScroll) return;
+
+    // Anything inside a cue block is that block's gesture (select, move,
+    // resize); everywhere else on the strip scrubs.
+    const onBlock = e => !!e.target.closest?.('.tm-timeline-block');
+
+    timelineScroll.addEventListener('mousedown', e => {
+        if (e.button !== 0 || onBlock(e) || dragState) return;
+        e.preventDefault();
+        scrubbing = true;
+        wasPlayingBeforeScrub = video ? !video.paused : false;
+        // Scrubbing with the audio running is how you find a hard consonant
+        // to cut on; silent scrubbing is how you move without being deafened.
+        // The user picks, and the default is silence.
+        if (!scrubAudio && video && !video.paused) video.pause();
+        seekTo(timeAtClientX(e.clientX));
+        document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', e => {
+        if (!scrubbing) return;
+        seekTo(timeAtClientX(e.clientX));
+        showReadout(`<b>${tcLabel(video?.currentTime || 0)}</b>`);
+        scheduleRulerRedraw();
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!scrubbing) return;
+        scrubbing = false;
+        document.body.style.userSelect = '';
+        hideReadout();
+        if (wasPlayingBeforeScrub && video?.paused) video.play();
+    });
+
+    // Hover guide + readout: line an edit up against the waveform before
+    // committing to it.
+    timelineScroll.addEventListener('mousemove', e => {
+        if (scrubbing || dragState) return;
+        hoverSecs = timeAtClientX(e.clientX);
+        timelineWrap.classList.add('tm-tl-hovering');
+        if (timelineHover) timelineHover.style.left = (hoverSecs * pxPerSecond) + 'px';
+        const region = peaks && TmWaveform.regionAt(peaks, hoverSecs);
+        showReadout(tcLabel(hoverSecs) + (region ? ' · dialogue' : ''));
+    });
+
+    timelineScroll.addEventListener('mouseleave', () => {
+        hoverSecs = null;
+        timelineWrap.classList.remove('tm-tl-hovering');
+        if (!scrubbing && !dragState) hideReadout();
+    });
+
+    // Ctrl/⌘ + wheel zooms about the pointer, which is how every other
+    // timeline behaves; a plain wheel scrolls the strip sideways, since the
+    // lane has nowhere to scroll vertically.
+    timelineScroll.addEventListener('wheel', e => {
+        if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            const anchor = timeAtClientX(e.clientX);
+            const before = (e.clientX - timelineScroll.getBoundingClientRect().left);
+            setZoom(pxPerSecond * (e.deltaY < 0 ? 1.25 : 1 / 1.25), anchor);
+            // setZoom centres on the anchor; put it back under the pointer.
+            timelineScroll.scrollLeft = Math.max(0, anchor * pxPerSecond - before);
+            scheduleRulerRedraw();
+        } else if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+            e.preventDefault();
+            timelineScroll.scrollLeft += e.deltaY;
+        }
+    }, { passive: false });
+}
+
 
 // ── Blocks: render, select, drag, resize ────────────
 function handleBlockSelect(e, id) {
@@ -973,6 +1499,12 @@ function snapValue(t, excludeIds) {
     });
     const frameLen = 1 / fps;
     candidates.push(Math.round(t / frameLen) * frameLen);
+    // Where the dialogue actually starts and stops beats any round number,
+    // so the detected speech edges join the snap candidates.
+    if (snapToAudio && peaks) {
+        const edge = TmWaveform.nearestEdge(peaks, t, SNAP_PX * 2 / pxPerSecond);
+        if (edge != null) candidates.push(edge);
+    }
     const threshold = SNAP_PX / pxPerSecond;
     let best = t, bestDist = threshold;
     for (const c of candidates) {
@@ -1047,12 +1579,23 @@ function onDragMove(e) {
         ev.endTime = secsToSrtTc(newEnd);
         updateBlockDom(ids[0]);
     }
+
+    // Numbers, not eyeballing: during a drag this readout is the only place
+    // the new timing is legible before it is committed.
+    const primary = events.find(x => x.id === primaryId);
+    if (primary) {
+        const dur = tcToSecs(primary.endTime) - tcToSecs(primary.startTime);
+        showReadout(`<b>${tcLabel(tcToSecs(primary.startTime))}</b> \u2192 `
+            + `<b>${tcLabel(tcToSecs(primary.endTime))}</b> · ${dur.toFixed(2)}s`);
+    }
+    scheduleRulerRedraw();
 }
 
 function onDragEnd() {
     document.removeEventListener('mousemove', onDragMove);
     document.removeEventListener('mouseup', onDragEnd);
     document.body.style.userSelect = '';
+    hideReadout();
     if (dragState) {
         const changed = dragState.ids.some(id => {
             const o = dragState.orig.get(id);
@@ -1175,8 +1718,13 @@ function selectEvent(id, options = {}) {
     selectedIds = new Set([id]);
     autoPauseArmed = true;
 
-    if (previous !== id && previous != null) refreshCue(previous, { keepCaret: false });
-    const card = refreshCue(id, { keepCaret: false });
+    let card;
+    if (expandedView) {
+        card = moveOpenCard(previous, id);
+    } else {
+        if (previous !== id && previous != null) refreshCue(previous, { keepCaret: false });
+        card = refreshCue(id, { keepCaret: false });
+    }
     updateSelection();
     fitOpenCard();
 
@@ -1298,7 +1846,7 @@ function cueRowHtml(ev, i) {
 </div>`;
 }
 
-function cueCardHtml(ev, i) {
+function cueCardHtml(ev, i, open = true) {
     const cps      = readingSpeed(ev.translatedText, ev.startTime, ev.endTime);
     const cpsNum   = parseFloat(cps);
     // Amber a little before the limit, red past it.
@@ -1311,7 +1859,7 @@ function cueCardHtml(ev, i) {
     const durStr   = Math.max(0, tcToSecs(ev.endTime) - tcToSecs(ev.startTime)).toFixed(2) + 's';
     const hasNote  = !!ev.comment?.trim();
 
-    return `<div class="tm-cue-item tm-event-card tm-cue-item-open${isLocked ? ' tm-event-locked' : ''}" data-id="${ev.id}">
+    return `<div class="tm-cue-item tm-event-card ${open ? 'tm-cue-item-open' : 'tm-cue-item-expanded'}${isLocked ? ' tm-event-locked' : ''}" data-id="${ev.id}">
     <div class="tm-event-meta">
         <span class="tm-event-index">#${i + 1}</span>
         <div class="tm-event-times">
@@ -1376,8 +1924,63 @@ function cueCardHtml(ev, i) {
 </div>`;
 }
 
+// Expanded view opens every cue as a full card, for translators who would
+// rather scroll through editable lines than click each row open. The cue
+// being worked on is still marked as the open card.
+const EXPANDED_KEY = 'tm-expanded-view';
+let expandedView = (() => {
+    try { return localStorage.getItem(EXPANDED_KEY) === '1'; }
+    catch { return false; }
+})();
+
 function cueHtml(ev, i) {
-    return ev.id === activeId ? cueCardHtml(ev, i) : cueRowHtml(ev, i);
+    if (ev.id === activeId) return cueCardHtml(ev, i);
+    return expandedView ? cueCardHtml(ev, i, false) : cueRowHtml(ev, i);
+}
+
+function paintExpandedToggle() {
+    document.querySelector('.tm-editor-right')?.classList.toggle('tm-expanded-view', expandedView);
+    const button = document.getElementById('btnExpandedView');
+    if (!button) return;
+    button.setAttribute('aria-pressed', String(expandedView));
+    button.classList.toggle('tm-toggle-on', expandedView);
+    button.title = expandedView ? 'Switch to compact rows' : 'Expand every cue into a full editing card';
+    button.setAttribute('aria-label', button.title);
+    const icon = button.querySelector('i');
+    if (icon) icon.className = expandedView ? 'bi bi-list' : 'bi bi-arrows-expand';
+}
+
+function setExpandedView(on) {
+    expandedView = on;
+    try { localStorage.setItem(EXPANDED_KEY, on ? '1' : '0'); }
+    catch { /* storage unavailable; the choice just will not persist */ }
+    paintExpandedToggle();
+    renderEvents();
+    const card = eventsList.querySelector('.tm-cue-item-open');
+    if (card) scrollCardInList(card, 'center');
+}
+
+// In expanded view every cue is already a card, so changing the selection
+// only moves the "open" marking. Rebuilding the card would throw away the
+// caret of a translator who just clicked into it.
+function moveOpenCard(fromId, toId) {
+    if (fromId != null && fromId !== toId) {
+        const from = eventsList.querySelector(`.tm-cue-item[data-id="${fromId}"]`);
+        if (from) {
+            from.classList.replace('tm-cue-item-open', 'tm-cue-item-expanded');
+            from.style.maxHeight = '';
+            from.style.overflowY = '';
+            from.querySelectorAll('textarea').forEach(box => { box.style.height = ''; box.style.overflowY = ''; });
+            const hint = from.querySelector('.tm-quality-hint');
+            if (hint) hint.textContent = '';
+        }
+    }
+    const to = eventsList.querySelector(`.tm-cue-item[data-id="${toId}"]`);
+    if (to && !to.classList.contains('tm-cue-row')) {
+        to.classList.replace('tm-cue-item-expanded', 'tm-cue-item-open');
+        return to;
+    }
+    return refreshCue(toId, { keepCaret: false });
 }
 
 // Visible cues paired with their number as shown to the translator, which
@@ -1546,6 +2149,14 @@ eventsList.addEventListener('click', e => {
     if (video && Number.isFinite(tcToSecs(ev.startTime))) video.currentTime = tcToSecs(ev.startTime);
 });
 
+// In expanded view any card can be typed into; doing so makes it the
+// selected cue, so the overlay, timeline and quality hint follow along.
+eventsList.addEventListener('focusin', e => {
+    if (!expandedView || !e.target.matches('input, textarea, select')) return;
+    const id = cueIdFromEvent(e);
+    if (id != null && id !== activeId) selectEvent(id);
+});
+
 // Rows are focusable, so the list is usable without a mouse.
 eventsList.addEventListener('keydown', e => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -1613,29 +2224,54 @@ eventsList.addEventListener('input', e => {
 //  ADD EVENT
 // ══════════════════════════════════════════════════
 
+// A new line goes straight under the cue being worked on, timed into the gap
+// after it, so a translator adding a missed line mid-film does not have to go
+// find it at the bottom. With nothing selected it falls back to the playhead
+// and the end of the track.
+const NEW_CUE_SECS = 2;
+const MIN_GAP_SECS = 0.5;
+
+function newCueTiming(after, next) {
+    if (!after) {
+        const at = video ? video.currentTime : 0;
+        return [at, at + NEW_CUE_SECS];
+    }
+    const start = tcToSecs(after.endTime);
+    const nextStart = next ? tcToSecs(next.startTime) : Infinity;
+    // Fill the gap up to the next cue when there is room; otherwise take the
+    // default length and let the overlap warning point it out.
+    const end = nextStart - start >= MIN_GAP_SECS
+        ? Math.min(start + NEW_CUE_SECS, nextStart)
+        : start + NEW_CUE_SECS;
+    return [start, end];
+}
+
 let nextTempId = -1;
 btnAddEvent.addEventListener('click', () => {
+    if (!translatorOnly()) return;
     if (!loaded) return;
     document.getElementById('cueSearch').value = '';
     document.getElementById('cueFilter').value = 'all';
-    const start = video ? secsToSrtTc(video.currentTime)     : '00:00:00,000';
-    const end   = video ? secsToSrtTc(video.currentTime + 3) : '00:00:03,000';
+    const at    = events.findIndex(x => x.id === activeId);
+    const after = at >= 0 ? events[at] : null;
+    const [start, end] = newCueTiming(after, events[at + 1]);
     const ev    = {
         id: nextTempId--,
-        index: events.length + 1,
-        startTime: start,
-        endTime: end,
+        index: at >= 0 ? at + 2 : events.length + 1,
+        startTime: secsToSrtTc(start),
+        endTime: secsToSrtTc(end),
         originalText: '',
         translatedText: '',
         originalLocked: false // typed by hand, not imported — stays editable
     };
-    events.push(ev);
+    if (after) events.splice(at + 1, 0, ev);
+    else events.push(ev);
     activeId = ev.id;
+    selectedIds = new Set([ev.id]);
     markDirty();
     renderEvents();
     renderTimelineBlocks();
-    eventsList.lastElementChild?.scrollIntoView({ behavior: 'smooth' });
-    eventsList.lastElementChild?.querySelector('.tm-translated-input')?.focus();
+    selectEvent(ev.id, { scrollBlock: 'center', focusTranslation: true });
 });
 
 // ══════════════════════════════════════════════════
@@ -1655,6 +2291,147 @@ function markDirty() {
     autoSaveTimer = setTimeout(() => doSave(), 2000);
 }
 
+// The server matches cues to stored rows by id. A new cue goes up with a
+// negative temporary id and comes back with the row it became, which the
+// editor adopts so the next save updates that row instead of adding the line
+// again. The map outlives the swap because undo snapshots and a recovered
+// draft can still hold the temporary id.
+const storedIds = new Map();
+const storedIdFor = id => storedIds.get(id) ?? id;
+
+function adoptStoredIds(assigned) {
+    for (const { temp, id } of assigned) {
+        if (typeof temp !== 'number' || typeof id !== 'number') continue;
+        storedIds.set(temp, id);
+        const ev = events.find(x => x.id === temp);
+        if (!ev) continue;
+        ev.id = id;
+        if (activeId === temp) activeId = id;
+        if (selectedIds.delete(temp)) selectedIds.add(id);
+        if (lockedIds.delete(temp)) { lockedIds.add(id); saveLocked(); }
+        // Relabel rather than re-render, so a translator typing in the card
+        // keeps the caret.
+        document.querySelectorAll(`[data-id="${temp}"]`).forEach(node => { node.dataset.id = String(id); });
+    }
+}
+
+// Temporary ids must not collide with any already in play, such as those in a
+// draft recovered from a previous visit.
+function reserveTempIds() {
+    for (const ev of events) if (typeof ev.id === 'number' && ev.id <= nextTempId) nextTempId = ev.id - 1;
+}
+
+// ── Working alongside the other seat ─────────────
+// While a project is under review the translator and the revisor both have it
+// open, and every save bumps the project revision — so each one's next save
+// would be refused as stale, and the only way out used to be a reload that
+// threw away whatever they had not saved yet.
+//
+// Most of those refusals are not real conflicts: each seat owns different
+// fields of a cue, and the server only takes a seat's own fields. So a refused
+// save is first merged three ways, field by field, against the version this
+// editor last agreed with the server on (the baseline):
+//   - a field only this editor changed keeps its local value;
+//   - a field only the server changed takes the server's value;
+//   - a field both changed, differently, is a real conflict, and the old
+//     reload banner is shown instead of guessing.
+// Lines added or removed on the server are taken as they are; only the
+// translator can do that, so it never races the translator's own edits.
+
+const CUE_FIELDS = ['startTime', 'endTime', 'originalText', 'translatedText', 'originalLocked',
+    'comment', 'status', 'suggestedText', 'suggestionState', 'previousTranslatedText',
+    'reviewFlag', 'reviewSeverity', 'reviewNote'];
+
+let baseline = new Map();   // id → the cue as the server last had it
+
+function rememberBaseline(serverEvents) {
+    baseline = new Map((serverEvents || []).map(ev => [ev.id, { ...ev }]));
+}
+
+// null and '' are the same thing to the server (an empty note is stored as
+// null), and timecodes are compared as time, not as text.
+function sameValue(field, a, b) {
+    if (field === 'startTime' || field === 'endTime') return Math.abs(tcToSecs(a) - tcToSecs(b)) < 0.0005;
+    const norm = v => (v === undefined || v === null || v === '' ? null : v);
+    return norm(a) === norm(b);
+}
+
+// Returns the merged track, or null when the two sides really disagree.
+function mergeWithServer(local, server) {
+    const serverById = new Map(server.map(ev => [ev.id, ev]));
+    const merged = [];
+    const localIds = new Set();
+
+    for (const mine of local) {
+        const id = storedIdFor(mine.id);
+        localIds.add(id);
+        const base = baseline.get(id);
+        const theirs = serverById.get(id);
+        if (id < 0 || !base) { merged.push(mine); continue; }    // new here
+        if (!theirs) {
+            // Deleted on the server. Keep it only if this editor changed it —
+            // and then it is a conflict, because there is no row to put it in.
+            if (CUE_FIELDS.some(f => !sameValue(f, mine[f], base[f]))) return null;
+            continue;
+        }
+        const cue = { ...mine };
+        for (const f of CUE_FIELDS) {
+            const changedHere = !sameValue(f, mine[f], base[f]);
+            const changedThere = !sameValue(f, theirs[f], base[f]);
+            if (changedThere && !changedHere) cue[f] = theirs[f];
+            else if (changedThere && changedHere && !sameValue(f, mine[f], theirs[f])) {
+                // The revisor's box starts as a copy of the translation and the
+                // server stores no suggestion when they match; that is not a
+                // disagreement worth stopping for.
+                if (f === 'suggestedText' && sameValue(f, mine[f], theirs.translatedText)) { cue[f] = theirs[f]; continue; }
+                return null;
+            }
+        }
+        merged.push(cue);
+    }
+
+    // Lines added on the server since the baseline, placed after the line
+    // they follow there.
+    server.forEach((ev, i) => {
+        if (localIds.has(ev.id) || baseline.has(ev.id)) return;
+        const before = server[i - 1];
+        const at = before ? merged.findIndex(x => storedIdFor(x.id) === before.id) : -1;
+        merged.splice(at + 1, 0, { ...ev });
+    });
+    return merged;
+}
+
+// Fetches the newer version, merges, and reports whether saving can go on.
+let mergeAttempts = 0;
+async function rebaseOnServer() {
+    if (++mergeAttempts > 3) return false;   // keeps losing the race; let a person look
+    try {
+        const res = await fetch(`/studio/${PROJECT_ID}/events`);
+        if (!res.ok) return false;
+        const payload = await res.json();
+        if (!Array.isArray(payload?.events) || typeof payload.revision !== 'number') return false;
+        const merged = mergeWithServer(events, payload.events);
+        if (!merged) return false;
+
+        const before = new Map(events.map(ev => [ev.id, JSON.stringify(ev)]));
+        events = merged;
+        loadedRevision = payload.revision;
+        rememberBaseline(payload.events);
+        reserveTempIds();
+        invalidateIssues();
+        // Redraw only what the merge changed, and never the card being typed
+        // in (refreshCue leaves a focused card alone).
+        const shapeChanged = merged.length !== before.size || merged.some(ev => !before.has(ev.id));
+        if (shapeChanged) renderEvents();
+        else merged.forEach(ev => { if (before.get(ev.id) !== JSON.stringify(ev)) refreshCue(ev.id); });
+        renderTimelineBlocks();
+        updateWorkspace();
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 async function doSave() {
     if (!loaded || saving || revisionStale) return;
     if (events.some(ev => SubtitleCore.issues(ev, []).includes('Invalid timing'))) {
@@ -1672,6 +2449,7 @@ async function doSave() {
             body: JSON.stringify({
                 revision: loadedRevision,
                 events: events.map(ev => ({ ...ev,
+                    id: storedIdFor(ev.id),
                     startTime: secsToSrtTc(tcToSecs(ev.startTime)),
                     endTime: secsToSrtTc(tcToSecs(ev.endTime))
                 }))
@@ -1681,6 +2459,12 @@ async function doSave() {
         // auto-saving rather than fight over the project, and give the
         // translator a way out that cannot lose their work.
         if (res.status === 409) {
+            if (await rebaseOnServer()) {
+                saveStatus.textContent = IS_REVISOR ? 'Merged the translator\'s changes — saving…' : 'Merged the revisor\'s changes — saving…';
+                // finally{} sees the revision still unsaved and saves again.
+                revision++;
+                return;
+            }
             revisionStale = true;
             clearTimeout(autoSaveTimer);
             saveStatus.textContent = 'Not saved — newer version on the server';
@@ -1698,6 +2482,9 @@ async function doSave() {
         if (!res.ok) throw new Error('Save failed');
         const data = await res.json();
         if (!data.success) throw new Error('Save failed');
+        if (Array.isArray(data.assigned)) adoptStoredIds(data.assigned);
+        if (Array.isArray(data.events)) rememberBaseline(data.events);
+        mergeAttempts = 0;
         if (typeof data.revision === 'number') { loadedRevision = data.revision; announceSave(data.revision); }
         isDirty = revision !== savedRevision;
         // The server copy is now authoritative for everything saved, so the
@@ -1724,7 +2511,8 @@ btnSave.addEventListener('click', () => {
 //  IMPORT SCRIPT (SRT / VTT)
 // ══════════════════════════════════════════════════
 
-importScript.addEventListener('change', async () => {
+// Only the translator's page renders the import control.
+importScript?.addEventListener('change', async () => {
     const file = importScript.files[0];
     if (!file || !loaded) return;
     const isDocx = /\.docx$/i.test(file.name);
@@ -2355,10 +3143,12 @@ function announceSave(rev)  { channel?.postMessage({ type: 'saved', tabId: TAB_I
         if (!Array.isArray(serverEvents)) throw new Error('Invalid response');
         loadedRevision = Array.isArray(payload) ? null : payload.revision ?? null;
         events = serverEvents;
+        rememberBaseline(serverEvents);
         loaded = true;
         history = [JSON.stringify(events)]; historyIndex = 0;
         saveStatus.textContent = 'All changes saved';
         offerDraftRecovery(serverEvents);
+        reserveTempIds();
         announceTab();
     } catch {
         eventsList.textContent = 'Could not load subtitles. Reload the page to try again.';
@@ -2375,6 +3165,11 @@ function announceSave(rev)  { channel?.postMessage({ type: 'saved', tabId: TAB_I
         drawTimelineRuler();
         renderTimelineBlocks();
     });
+    // Reading the audio is the expensive part, so it starts as soon as the
+    // media element knows what it is pointed at and reports back through the
+    // progress overlay rather than blocking anything else.
+    if (video?.currentSrc || video?.src) loadWaveform();
+    else video?.addEventListener('loadedmetadata', () => loadWaveform(), { once: true });
 })
 ();
 
@@ -2389,9 +3184,11 @@ const editorBody   = document.querySelector('.tm-editor-body');
 
 document.getElementById('cueSearch').addEventListener('input', renderEvents);
 document.getElementById('cueFilter').addEventListener('change', renderEvents);
+// The revisor's page has no status control: they report a verdict by
+// submitting their round instead.
 const projectStatus = document.getElementById('projectStatus');
-let previousStatus = projectStatus.value;
-projectStatus.addEventListener('change', async () => {
+let previousStatus = projectStatus?.value;
+projectStatus?.addEventListener('change', async () => {
     projectStatus.disabled = true;
     try {
         const res = await fetch(`/studio/${PROJECT_ID}/status`, {
@@ -2418,6 +3215,7 @@ document.getElementById('nextUntranslated').addEventListener('click', () => {
     if (video) video.currentTime = tcToSecs(next.startTime);
 });
 document.getElementById('copySource').addEventListener('click', () => {
+    if (!translatorOnly()) return;
     const ev = events.find(cue => cue.id === activeId);
     if (!ev) { alert('Select a cue first.'); return; }
     if (ev.translatedText && !confirm('Replace this translation with its source text?')) return;
@@ -2425,6 +3223,7 @@ document.getElementById('copySource').addEventListener('click', () => {
     markDirty(); renderEvents(); updateOverlay();
 });
 document.getElementById('btnSplitCue').addEventListener('click', () => {
+    if (!translatorOnly()) return;
     if (!loaded) return;
     const idx = events.findIndex(ev => ev.id === activeId);
     if (idx === -1) { alert('Select a cue first.'); return; }
@@ -2437,6 +3236,7 @@ document.getElementById('btnSplitCue').addEventListener('click', () => {
     } catch (error) { alert(error.message); }
 });
 document.getElementById('btnMergeCue').addEventListener('click', () => {
+    if (!translatorOnly()) return;
     if (!loaded) return;
     const idx = events.findIndex(ev => ev.id === activeId);
     if (idx === -1) { alert('Select a cue first.'); return; }
@@ -2490,6 +3290,7 @@ document.getElementById('shiftRange').addEventListener('click', () => {
     shiftCues(events.slice(from - 1, to));
 });
 document.getElementById('replaceAll').addEventListener('click', () => {
+    if (!translatorOnly()) return;
     const find = document.getElementById('findText').value;
     const replace = document.getElementById('replaceText').value;
     if (!find || !loaded) return;
@@ -2520,9 +3321,136 @@ document.getElementById('tlLock')?.addEventListener('click', toggleLockSelected)
 document.getElementById('tlZoomIn')?.addEventListener('click', () => setZoom(pxPerSecond * 1.5));
 document.getElementById('tlZoomOut')?.addEventListener('click', () => setZoom(pxPerSecond / 1.5));
 document.getElementById('tlZoomFit')?.addEventListener('click', () => setZoom(fitZoom()));
+document.getElementById('tlZoomSel')?.addEventListener('click', zoomToSelection);
+
+// ── Sound ───────────────────────────────────────────
+document.getElementById('tlPlayPreroll')?.addEventListener('click', playWithPreroll);
+document.getElementById('tlLoop')?.addEventListener('click', toggleLoopSelected);
+document.getElementById('tlMute')?.addEventListener('click', () => {
+    if (!video) return;
+    video.muted = !video.muted;
+    paintVolumeButton();
+    saveTimelinePrefs();
+});
+document.getElementById('tlVolume')?.addEventListener('input', e => setVolume(Number(e.target.value) / 100));
+document.getElementById('tlSpeed')?.addEventListener('change', e => {
+    if (video) video.playbackRate = parseFloat(e.target.value);
+    // The video toolbar has its own speed control; the two are the same
+    // setting and must not disagree about what it currently is.
+    if (speedSelect) speedSelect.value = e.target.value;
+});
+speedSelect?.addEventListener('change', () => {
+    const mirror = document.getElementById('tlSpeed');
+    if (mirror) mirror.value = speedSelect.value;
+});
+
+document.getElementById('tlGain')?.addEventListener('input', e => {
+    waveGain = Number(e.target.value) / 100;
+    const out = document.getElementById('tlGainOut');
+    if (out) out.textContent = waveGain.toFixed(1) + '\u00d7';
+    saveTimelinePrefs();
+    drawTimelineRuler();
+});
+document.getElementById('tlWaveView')?.addEventListener('change', e => {
+    waveView = e.target.value;
+    saveTimelinePrefs();
+    drawTimelineRuler();
+});
+document.getElementById('tlShowSpeech')?.addEventListener('change', e => {
+    showSpeech = e.target.checked;
+    saveTimelinePrefs();
+    drawTimelineRuler();
+});
+document.getElementById('tlScrubAudio')?.addEventListener('change', e => {
+    scrubAudio = e.target.checked;
+    saveTimelinePrefs();
+});
+document.getElementById('tlSnapAudio')?.addEventListener('change', e => {
+    snapToAudio = e.target.checked;
+    saveTimelinePrefs();
+});
+document.getElementById('tlPreroll')?.addEventListener('input', e => {
+    prerollSecs = Number(e.target.value) / 1000;
+    const out = document.getElementById('tlPrerollOut');
+    if (out) out.textContent = prerollSecs.toFixed(1) + 's';
+    saveTimelinePrefs();
+});
+document.getElementById('tlReanalyse')?.addEventListener('click', () => loadWaveform({ force: true }));
+
+// ── Timing ──────────────────────────────────────────
+document.getElementById('tlSetIn')?.addEventListener('click', markInPoint);
+document.getElementById('tlSetOut')?.addEventListener('click', markOutPoint);
+document.getElementById('tlSplitHere')?.addEventListener('click', splitAtPlayhead);
+document.getElementById('tlJoinNext')?.addEventListener('click', joinWithNext);
+document.getElementById('tlFitSpeech')?.addEventListener('click', fitSelectedToSpeech);
+document.getElementById('tlPrevSpeech')?.addEventListener('click', () => jumpToSpeechEdge(-1));
+document.getElementById('tlNextSpeech')?.addEventListener('click', () => jumpToSpeechEdge(1));
+
+// ── Options popover ─────────────────────────────────
+const tlAudioMenuBtn = document.getElementById('tlAudioMenuBtn');
+const tlAudioMenu = document.getElementById('tlAudioMenu');
+tlAudioMenuBtn?.addEventListener('click', e => {
+    e.stopPropagation();
+    const open = tlAudioMenu.hidden;
+    tlAudioMenu.hidden = !open;
+    tlAudioMenuBtn.setAttribute('aria-expanded', String(open));
+    tlAudioMenuBtn.classList.toggle('tm-toggle-on', open);
+    if (open) describeAnalysis();
+});
+document.addEventListener('click', e => {
+    if (!tlAudioMenu || tlAudioMenu.hidden) return;
+    if (tlAudioMenu.contains(e.target) || tlAudioMenuBtn.contains(e.target)) return;
+    tlAudioMenu.hidden = true;
+    tlAudioMenuBtn.setAttribute('aria-expanded', 'false');
+    tlAudioMenuBtn.classList.remove('tm-toggle-on');
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && tlAudioMenu && !tlAudioMenu.hidden) {
+        tlAudioMenu.hidden = true;
+        tlAudioMenuBtn.setAttribute('aria-expanded', 'false');
+        tlAudioMenuBtn.classList.remove('tm-toggle-on');
+    }
+});
+
+// Restore whatever the translator set last time. These are per-person
+// working preferences, not project data, so they stay in this browser.
+(function applyTimelinePrefs() {
+    const p = loadTimelinePrefs();
+    const set = (id, value) => { const el = document.getElementById(id); if (el != null && value != null) el.value = value; };
+    const check = (id, value) => { const el = document.getElementById(id); if (el && value != null) el.checked = !!value; };
+
+    if (Number.isFinite(p.waveGain)) waveGain = p.waveGain;
+    if (p.waveView) waveView = p.waveView;
+    if (p.showSpeech != null) showSpeech = !!p.showSpeech;
+    if (p.snapToAudio != null) snapToAudio = !!p.snapToAudio;
+    if (p.scrubAudio != null) scrubAudio = !!p.scrubAudio;
+    if (Number.isFinite(p.prerollSecs)) prerollSecs = p.prerollSecs;
+
+    set('tlGain', Math.round(waveGain * 100));
+    set('tlWaveView', waveView);
+    set('tlPreroll', Math.round(prerollSecs * 1000));
+    check('tlShowSpeech', showSpeech);
+    check('tlSnapAudio', snapToAudio);
+    check('tlScrubAudio', scrubAudio);
+    const gainOut = document.getElementById('tlGainOut');
+    if (gainOut) gainOut.textContent = waveGain.toFixed(1) + '\u00d7';
+    const prerollOut = document.getElementById('tlPrerollOut');
+    if (prerollOut) prerollOut.textContent = prerollSecs.toFixed(1) + 's';
+
+    if (video) {
+        if (Number.isFinite(p.volume)) video.volume = p.volume;
+        if (p.muted != null) video.muted = !!p.muted;
+        set('tlVolume', Math.round((video.volume ?? 1) * 100));
+        paintVolumeButton();
+    }
+})();
+
+wireTimelineSurface();
 document.getElementById('btnTogglePanel')?.addEventListener('click', toggleEventsPanel);
 document.getElementById('btnSwapColumns')?.addEventListener('click', swapColumns);
 document.getElementById('btnCardLayout')?.addEventListener('click', toggleCardLayout);
+document.getElementById('btnExpandedView')?.addEventListener('click', () => setExpandedView(!expandedView));
+paintExpandedToggle();
 document.getElementById('btnToggleTools')?.addEventListener('click', toggleWorkspaceTools);
 
 window.addEventListener('beforeunload', e => { if (isDirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -2581,7 +3509,9 @@ document.addEventListener('mousemove', e => {
     if (!isTimelineResizing) return;
     const editorWrapRect = document.querySelector('.tm-editor-wrap').getBoundingClientRect();
     const newHeight = editorWrapRect.bottom - e.clientY;
-    const clamped   = Math.min(Math.max(newHeight, 60), 300);
+    // A waveform is worth looking at, so the ceiling is generous; the floor
+    // still has to leave the cue list usable.
+    const clamped   = Math.min(Math.max(newHeight, 80), Math.max(200, editorWrapRect.height * 0.6));
     timelineWrapEl.style.height = clamped + 'px';
     drawTimelineRuler();
 });
@@ -2594,17 +3524,4 @@ document.addEventListener('mouseup', () => {
     document.body.style.userSelect = '';
 });
 
-async function decodeAudio() {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    try {
-        const response = await fetch(video.currentSrc || video.src);
-        if (!response.ok) throw new Error('Audio unavailable');
-        if (Number(response.headers.get('Content-Length')) > 128 * 1024 * 1024) {
-            await response.body?.cancel();
-            throw new Error('Media too large for browser waveform decoding');
-        }
-        const buffer = await response.arrayBuffer();
-        const decoded = await audioCtx.decodeAudioData(buffer);
-        return decoded.getChannelData(0);
-    } finally { await audioCtx.close(); }
-}
+

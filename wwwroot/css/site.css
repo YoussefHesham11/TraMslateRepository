@@ -14,7 +14,7 @@
     --danger:    #ff3355;
     --sidebar-w: 220px;
     --nav-h:     52px;
-    --timeline-h:150px;
+    --timeline-h:240px;
     --cue-text-h:56px;
 }
 /* Firefox */
@@ -251,6 +251,30 @@ body {
     padding: 10px 14px;
     font-size: 0.85rem;
     margin-bottom: 16px;
+}
+
+/* One-line outcome of a form post (People, Settings, Account). */
+.tm-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+    border: 1px solid;
+}
+.tm-notice-ok    { background: rgba(46,204,113,0.10); border-color: rgba(46,204,113,0.35); color: #7ee2a8; }
+.tm-notice-error { background: rgba(255,51,85,0.12);  border-color: rgba(255,51,85,0.35);  color: #ff8fa3; }
+
+.tm-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 14px;
+    color: var(--text);
 }
 
 /* ── Dashboard ───────────────────────────────────── */
@@ -695,12 +719,8 @@ body {
 .tm-save-error   { color: var(--danger); background: rgba(239,68,68,0.1); }
 
 /* ── Timeline blocks ─────────────────────────────── */
-.tm-timeline-events {
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 60%;
-    pointer-events: all;
-}
+/* The lane's position and height live in timeline.css, which is the only
+   place that knows how the ruler and waveform divide the strip. */
 
 /* .tm-timeline-block {
     position: absolute;
@@ -1180,21 +1200,21 @@ kbd {
    height on browser chrome, so these thresholds are deliberately
    generous. */
 @media (max-height: 860px) {
-    :root { --timeline-h: 128px; --cue-text-h: 52px; }
+    :root { --timeline-h: 200px; --cue-text-h: 52px; }
 }
 @media (max-height: 740px) {
-    :root { --timeline-h: 110px; --cue-text-h: 46px; }
+    :root { --timeline-h: 172px; --cue-text-h: 46px; }
     .tm-events-header { padding: 8px 14px; }
     .tm-timeline-toolbar { padding: 4px 12px; }
 }
 @media (max-height: 640px) {
-    :root { --timeline-h: 92px; --cue-text-h: 40px; }
+    :root { --timeline-h: 128px; --cue-text-h: 40px; }
     .tm-editor-topbar { padding: 6px 16px; }
     .tm-event-col { padding: 7px 10px; }
     .tm-event-columns { gap: 8px; }
 }
 @media (max-height: 540px) {
-    :root { --timeline-h: 78px; --cue-text-h: 34px; }
+    :root { --timeline-h: 94px; --cue-text-h: 34px; }
     .tm-editor-langs { display: none; }
     .tm-event-col { padding: 5px 8px; }
 }
