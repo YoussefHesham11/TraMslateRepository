@@ -1,83 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
-const fs = require('node:fs');
 const core = require('../wwwroot/js/subtitle-core.js');
+const { setup, settle, ok } = require('./harness.cjs');
 
-// A small DOM stub exercises the actual editor's network/state logic without a
-// browser. Layout and rendering are covered separately, in a real browser, by
-// tests/browser/layout-check.cjs.
-function setup({ store = {}, role = 'Translator' } = {}) {
-    const nodes = new Map();
-    function element() {
-        return {
-            value: '', dataset: {}, style: {}, children: [], hidden: false,
-            classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
-            addEventListener() {}, removeEventListener() {}, setAttribute() {},
-            appendChild(child) { this.children.push(child); return child; },
-            replaceWith() {}, contains: () => false, focus() {}, click() {},
-            closest: () => null, matches: () => false,
-            querySelectorAll() { return []; }, querySelector() { return element(); },
-            scrollIntoView() {}, scrollTo() {}, getBoundingClientRect: () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 }),
-            // The timeline canvas draws whenever there are cues to show, with
-            // or without a video, so the stub has to answer getContext.
-            width: 0, height: 0, clientWidth: 900, clientHeight: 120, offsetHeight: 120,
-            scrollTop: 0, scrollLeft: 0, scrollHeight: 0, scrollWidth: 0,
-            getContext: () => new Proxy({}, {
-                get: (_, key) => (key === "canvas" ? undefined
-                    : key === "createLinearGradient" ? () => ({ addColorStop() {} })
-                    : key === "measureText" ? () => ({ width: 0 })
-                    : () => {}),
-                set: () => true,
-            }),
-        };
-    }
-    const get = id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
-    const requests = [];
-    const messages = [];
-    const confirmAnswers = [];
-
-    const context = vm.createContext({
-        SubtitleCore: core, PROJECT_ID: 1, console, URL, URLSearchParams, Blob,
-        // The editor branches on these. The default seats the stub as the
-        // translator; the review tests pass role: 'Revisor'.
-        USER_ROLE: role,
-        CAN_EDIT_TRANSLATION: role === 'Translator',
-        CAN_REVIEW: role === 'Revisor',
-        document: {
-            getElementById: id => (id === 'videoPlayer' ? null : get(id)),
-            querySelector: () => element(), querySelectorAll: () => [],
-            addEventListener() {}, createElement: element, activeElement: null,
-        },
-        window: { addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }) },
-        ResizeObserver: class { observe() {} },
-        BroadcastChannel: class {
-            constructor(name) { this.name = name; }
-            postMessage(msg) { messages.push(msg); }
-            addEventListener() {}
-            close() {}
-        },
-        Shortcuts: { on() {}, describe() {}, byId() {}, effective: () => '', setOverrides() {}, whenReady: () => Promise.resolve() },
-        localStorage: {
-            getItem: key => (key in store ? store[key] : null),
-            setItem: (key, value) => { store[key] = String(value); },
-            removeItem: key => { delete store[key]; },
-        },
-        setTimeout: () => 1, clearTimeout() {}, alert() {},
-        confirm: () => (confirmAnswers.length ? confirmAnswers.shift() : true),
-        fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
-    });
-
-    vm.runInContext(fs.readFileSync(require.resolve('../wwwroot/js/editor.js'), 'utf8'), context);
-    return {
-        context, requests, nodes, store, messages, confirmAnswers,
-        run: code => vm.runInContext(code, context),
-        body: index => JSON.parse(requests[index].options.body),
-    };
-}
-
-const settle = () => new Promise(resolve => setImmediate(resolve));
-const ok = body => ({ ok: true, status: 200, json: async () => body });
 
 test('failed initial load never permits an empty overwrite', async () => {
     const app = setup();
@@ -141,12 +66,20 @@ test('a save carries the revision the editor loaded, and adopts the one it is gi
     assert.equal(app.run('loadedRevision'), 8);
 });
 
-test('a rejected save stops auto-saving instead of overwriting newer work', async () => {
+const line = (over = {}) => ({ id: 5, startTime: '00:00:01,000', endTime: '00:00:02,000', originalText: 'src',
+    translatedText: 'base', suggestedText: null, suggestionState: 0, reviewFlag: 0, reviewSeverity: 0, reviewNote: null, ...over });
+const refused = { ok: false, status: 409, json: async () => ({ conflict: true, revision: 9 }) };
+
+test('a rejected save stops auto-saving when both sides changed the same field', async () => {
     const app = setup();
-    app.requests[0].resolve(ok({ revision: 2, events: [] }));
+    app.requests[0].resolve(ok({ revision: 2, events: [line()] }));
     await settle();
-    app.run("events = [{id:-1,startTime:'00:00:01,000',endTime:'00:00:02,000',translatedText:'mine'}]; markDirty(); doSave();");
-    app.requests[1].resolve({ ok: false, status: 409, json: async () => ({ conflict: true, revision: 9 }) });
+    app.run("events[0].translatedText = 'mine'; markDirty(); doSave();");
+    app.requests[1].resolve(refused);
+    await settle();
+    // The editor fetches the newer version to try a merge; it disagrees on the
+    // very line this editor changed.
+    app.requests[2].resolve(ok({ revision: 9, events: [line({ translatedText: 'theirs' })] }));
     await settle();
 
     assert.equal(app.run('revisionStale'), true);
@@ -156,6 +89,48 @@ test('a rejected save stops auto-saving instead of overwriting newer work', asyn
     app.run('markDirty(); doSave();');
     assert.equal(app.requests.length, before);
     assert.equal(app.run('events[0].translatedText'), 'mine');
+});
+
+test('a save refused because the revisor saved merges their suggestion and saves again', async () => {
+    const app = setup();
+    app.requests[0].resolve(ok({ revision: 2, events: [line(), line({ id: 6, startTime: '00:00:03,000', endTime: '00:00:04,000' })] }));
+    await settle();
+    app.run("events[0].translatedText = 'mine'; markDirty(); doSave();");
+    app.requests[1].resolve(refused);
+    await settle();
+    app.requests[2].resolve(ok({ revision: 9, events: [
+        line(),
+        line({ id: 6, startTime: '00:00:03,000', endTime: '00:00:04,000', suggestedText: 'better', suggestionState: 1, reviewFlag: 4 }),
+    ] }));
+    await settle();
+
+    assert.equal(app.run('revisionStale'), false);
+    assert.equal(app.run('loadedRevision'), 9);
+    assert.equal(app.run('events[0].translatedText'), 'mine', 'the translator keeps their edit');
+    assert.equal(app.run('events[1].suggestedText'), 'better', 'and gains the revisor’s suggestion');
+    assert.equal(app.run('events[1].suggestionState'), 1);
+    assert.equal(app.run('events[1].reviewFlag'), 4);
+});
+
+test('a revisor’s refused save takes the translator’s new line and wording', async () => {
+    const app = setup({ role: 'Revisor' });
+    app.requests[0].resolve(ok({ revision: 2, events: [line(), line({ id: 6, startTime: '00:00:03,000', endTime: '00:00:04,000' })] }));
+    await settle();
+    app.run("events[1].suggestedText = 'better'; events[1].reviewNote = 'why'; markDirty(); doSave();");
+    app.requests[1].resolve(refused);
+    await settle();
+    app.requests[2].resolve(ok({ revision: 9, events: [
+        line({ translatedText: 'edited by translator' }),
+        line({ id: 8, startTime: '00:00:02,200', endTime: '00:00:02,800', translatedText: 'inserted' }),
+        line({ id: 6, startTime: '00:00:03,000', endTime: '00:00:04,000' }),
+    ] }));
+    await settle();
+
+    assert.equal(app.run('revisionStale'), false);
+    assert.equal(JSON.stringify(app.run('events.map(e => e.id)')), '[5,8,6]', 'the inserted line lands in place');
+    assert.equal(app.run('events[0].translatedText'), 'edited by translator');
+    assert.equal(app.run('events[2].suggestedText'), 'better');
+    assert.equal(app.run('events[2].reviewNote'), 'why');
 });
 
 test('a local draft is kept while dirty and cleared once the server confirms', async () => {

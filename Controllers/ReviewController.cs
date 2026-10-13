@@ -213,8 +213,11 @@ namespace TraMslate.Controllers
             round.FlagCount = await _db.SubtitleEvents
                 .CountAsync(e => e.ProjectId == id && e.ReviewFlag != ReviewFlag.None);
 
+            // Approval finishes the review, not the project: the translator
+            // still confirms the final version with Done, which validates it
+            // and records which saved revision was delivered.
             context.Project.Status = verdict == ReviewVerdict.Approved
-                ? ProjectStatus.Completed
+                ? ProjectStatus.Approved
                 : ProjectStatus.ChangesRequested;
             context.Project.UpdatedAt = DateTime.UtcNow;
 

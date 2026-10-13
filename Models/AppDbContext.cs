@@ -13,6 +13,7 @@ namespace TraMslate.Data
         public DbSet<UserShortcut> UserShortcuts { get; set; }
         public DbSet<ProjectMember> ProjectMembers { get; set; }
         public DbSet<ReviewRound> ReviewRounds { get; set; }
+        public DbSet<ProjectSnapshot> ProjectSnapshots { get; set; }
 
         protected override void OnModelCreating(ModelBuilder builder)
         {
@@ -23,6 +24,21 @@ namespace TraMslate.Data
                 .WithMany(u => u.Projects)
                 .HasForeignKey(p => p.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Every write to a project row is conditional on the revision it
+            // read, so two saves racing each other cannot both win: the second
+            // fails with a concurrency error and is answered as a conflict.
+            builder.Entity<Project>()
+                .Property(p => p.Revision)
+                .IsConcurrencyToken();
+
+            builder.Entity<ProjectSnapshot>()
+                .HasOne(s => s.Project)
+                .WithMany()
+                .HasForeignKey(s => s.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+            builder.Entity<ProjectSnapshot>()
+                .HasIndex(s => new { s.ProjectId, s.CreatedAt });
 
             builder.Entity<SubtitleEvent>()
                 .HasOne(s => s.Project)

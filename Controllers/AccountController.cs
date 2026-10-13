@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using TraMslate.Models;
@@ -66,15 +67,81 @@ namespace TraMslate.Controllers
         {
             if (!ModelState.IsValid) return View(model);
 
+            // Repeated wrong passwords lock the account for a few minutes, so a
+            // password cannot be guessed by trying many in a row.
             var result = await _signInManager.PasswordSignInAsync(
-                model.Email, model.Password, model.RememberMe, lockoutOnFailure: false);
+                model.Email, model.Password, model.RememberMe, lockoutOnFailure: true);
 
             if (result.Succeeded)
                 return RedirectToAction("Index", "Dashboard");
 
-            ModelState.AddModelError(string.Empty, "Invalid email or password.");
+            ModelState.AddModelError(string.Empty, result.IsLockedOut
+                ? "Too many failed sign-in attempts. Wait a few minutes, then try again."
+                : "Invalid email or password.");
             return View(model);
         }
+
+        // ── Account ───────────────────────────────────────
+        [Authorize]
+        [HttpGet("account")]
+        public async Task<IActionResult> Manage()
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return RedirectToAction(nameof(Login));
+            return View(ManageModel(user));
+        }
+
+        [Authorize]
+        [HttpPost("account/profile")]
+        public async Task<IActionResult> UpdateProfile([Bind(Prefix = "Profile")] ProfileViewModel profile)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return RedirectToAction(nameof(Login));
+            if (!ModelState.IsValid)
+            {
+                var model = ManageModel(user);
+                model.Profile = profile;
+                return View(nameof(Manage), model);
+            }
+
+            user.FullName = profile.FullName.Trim();
+            user.LanguageSpecialty = string.IsNullOrWhiteSpace(profile.LanguageSpecialty) ? null : profile.LanguageSpecialty.Trim();
+            await _userManager.UpdateAsync(user);
+            TempData["AccountNotice"] = "Profile saved.";
+            return RedirectToAction(nameof(Manage));
+        }
+
+        [Authorize]
+        [HttpPost("account/password")]
+        public async Task<IActionResult> ChangePassword([Bind(Prefix = "Password")] ChangePasswordViewModel password)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return RedirectToAction(nameof(Login));
+
+            if (ModelState.IsValid)
+            {
+                var result = await _userManager.ChangePasswordAsync(user, password.CurrentPassword, password.NewPassword);
+                if (result.Succeeded)
+                {
+                    // Refreshing the sign-in keeps this session valid after the
+                    // security stamp changes.
+                    await _signInManager.RefreshSignInAsync(user);
+                    TempData["AccountNotice"] = "Password changed.";
+                    return RedirectToAction(nameof(Manage));
+                }
+                foreach (var error in result.Errors)
+                    ModelState.AddModelError(string.Empty, error.Code == "PasswordMismatch"
+                        ? "Your current password is not correct."
+                        : error.Description);
+            }
+            return View(nameof(Manage), ManageModel(user));
+        }
+
+        private static ManageAccountViewModel ManageModel(ApplicationUser user) => new()
+        {
+            Email = user.Email ?? string.Empty,
+            Profile = new ProfileViewModel { FullName = user.FullName, LanguageSpecialty = user.LanguageSpecialty },
+        };
 
         // ── Logout ────────────────────────────────────────
         [HttpPost("logout")]

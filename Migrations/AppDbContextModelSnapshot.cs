@@ -238,14 +238,36 @@ namespace TraMslate.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CompletedById")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("CompletedRevision")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CompletionSummary")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
                     b.Property<string>("Description")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("LastSaveId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("LastSaveResultJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<int>("Revision")
+                        .IsConcurrencyToken()
                         .HasColumnType("int");
+
+                    b.Property<string>("SettingsJson")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("SourceLanguage")
                         .IsRequired()
@@ -310,6 +332,53 @@ namespace TraMslate.Migrations
                     b.ToTable("ProjectMembers");
                 });
 
+            modelBuilder.Entity("TraMslate.Models.ProjectSnapshot", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("CueCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EventsJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Label")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("ProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SettingsJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("TranslatedCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "CreatedAt");
+
+                    b.ToTable("ProjectSnapshots");
+                });
+
             modelBuilder.Entity("TraMslate.Models.ReviewRound", b =>
                 {
                     b.Property<int>("Id")
@@ -367,11 +436,20 @@ namespace TraMslate.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("Bookmarked")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Comment")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<bool>("CommentResolved")
+                        .HasColumnType("bit");
+
                     b.Property<TimeSpan>("EndTime")
                         .HasColumnType("time");
+
+                    b.Property<int>("Flags")
+                        .HasColumnType("int");
 
                     b.Property<int>("Index")
                         .HasColumnType("int");
@@ -397,6 +475,9 @@ namespace TraMslate.Migrations
                     b.Property<int>("ReviewSeverity")
                         .HasColumnType("int");
 
+                    b.Property<int>("ReviewState")
+                        .HasColumnType("int");
+
                     b.Property<TimeSpan>("StartTime")
                         .HasColumnType("time");
 
@@ -415,6 +496,9 @@ namespace TraMslate.Migrations
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("WaiversJson")
+                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
 
@@ -530,6 +614,17 @@ namespace TraMslate.Migrations
                     b.Navigation("Project");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("TraMslate.Models.ProjectSnapshot", b =>
+                {
+                    b.HasOne("TraMslate.Models.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
                 });
 
             modelBuilder.Entity("TraMslate.Models.ReviewRound", b =>

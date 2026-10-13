@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] — TraMslate</title>
+    <link rel="icon" href="~/favicon.ico" sizes="48x48" asp-append-version="true" />
+    <link rel="icon" href="~/favicon.svg" type="image/svg+xml" asp-append-version="true" />
+    <link rel="apple-touch-icon" href="~/apple-touch-icon.png" asp-append-version="true" />
+    <meta name="theme-color" content="#0a0a0c" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
@@ -27,16 +31,24 @@
                    class="@(ViewContext.RouteData.Values["action"]?.ToString() == "Create" ? "active" : "")">
                     <i class="bi bi-plus-circle"></i> New Project
                 </a>
-                <a asp-controller="Settings" asp-action="Shortcuts"
-                   class="@(ViewContext.RouteData.Values["controller"]?.ToString() == "Settings" ? "active" : "")">
+                @{ var onShortcuts = ViewContext.RouteData.Values["controller"]?.ToString() == "Settings"; }
+                <a asp-controller="Settings" asp-action="Shortcuts" id="navShortcuts"
+                   class="@(onShortcuts ? "active" : "")"
+                   title="@(onShortcuts ? "Back to where you were" : "Keyboard shortcuts")"
+                   data-back="@(onShortcuts ? "true" : null)"
+                   data-fallback="@Url.Action("Index", "Dashboard")">
                     <i class="bi bi-keyboard"></i> Shortcuts
                 </a>
             </nav>
         </div>
+        @* Page-specific actions in the middle of the bar (the editor's Done),
+           so they never displace the navigation on either side. *@
+        @await RenderSectionAsync("NavCenter", required: false)
         <div class="tm-topnav-right">
-            <span class="tm-nav-user">
+            <a asp-controller="Account" asp-action="Manage" class="tm-nav-user" title="Your account — profile and password"
+               style="text-decoration:none;">
                 <i class="bi bi-person-circle"></i> @User.Identity.Name
-            </span>
+            </a>
             <form asp-controller="Account" asp-action="Logout" method="post" style="margin:0;">
                 @Html.AntiForgeryToken()
                 <button type="submit" class="tm-nav-logout">
@@ -57,6 +69,23 @@ else
     </main>
 }
 
+<script>
+    // On the Shortcuts page its own nav link works as a toggle: pressing it
+    // again goes back to the page you came from (the editor, usually), or to
+    // the dashboard when there is nothing in this site to go back to.
+    document.getElementById('navShortcuts')?.addEventListener('click', e => {
+        const link = e.currentTarget;
+        if (!link.dataset.back) return;
+        e.preventDefault();
+        let cameFromHere = false;
+        try {
+            const from = new URL(document.referrer);
+            cameFromHere = from.origin === location.origin && from.pathname !== location.pathname;
+        } catch { /* no referrer */ }
+        if (cameFromHere && history.length > 1) history.back();
+        else location.href = link.dataset.fallback;
+    });
+</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 @await RenderSectionAsync("Scripts", required: false)
 </body>

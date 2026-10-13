@@ -39,6 +39,21 @@ namespace TraMslate.Models
         public string? ReviewNote { get; set; }
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+        // ── Workflow marks ────────────────────────────────
+        // Things a person sets to say "come back to this". They block Done
+        // until cleared, unlike the automatic checks, which can be waived.
+        public CueFlags Flags { get; set; } = CueFlags.None;
+        public bool Bookmarked { get; set; }
+        // Review progress, separate from Status (the translator's own view of
+        // the line), so "translated" and "reviewed" can be told apart.
+        public CueReviewState ReviewState { get; set; } = CueReviewState.NotReviewed;
+        // The translator's comment is a question until someone resolves it.
+        public bool CommentResolved { get; set; }
+        // Automatic findings a person has decided are fine for this line, with
+        // the reason, e.g. a name that is the same in both languages. JSON:
+        // [{ "code": "...", "reason": "...", "by": "...", "at": "..." }]
+        public string? WaiversJson { get; set; }
+
         // FK to project
         public int ProjectId { get; set; }
         public Project? Project { get; set; }

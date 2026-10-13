@@ -1,0 +1,395 @@
+/* ══════════════════════════════════════════════════════════════════════
+   Checking, workflow and completion: the Done area, the issues panel and
+   problem explanations, workflow marks, previews and history dialogs.
+   Severity is always written out in words beside its colour and icon.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.tm-sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ── Done ─────────────────────────────────────────── */
+/* In the middle of the global bar (see _Layout's NavCenter section), which
+   is empty on the editor page; the bar's own links and account controls
+   stay exactly where they were. */
+.tm-topnav-center {
+    flex: 0 1 auto;
+    min-width: 0;
+    display: flex;
+    justify-content: center;
+    padding: 0 16px;
+}
+.tm-done-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.tm-done-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 26px;
+    border: 2px solid var(--success);
+    border-radius: 10px;
+    background: rgba(41,199,111,0.18);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    flex: none;
+    transition: background 0.15s, opacity 0.15s;
+}
+.tm-done-btn { border-color: #29c76f; }
+.tm-done-btn:hover:not(:disabled) { background: rgba(41,199,111,0.32); }
+.tm-done-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.tm-done-btn:disabled {
+    cursor: not-allowed;
+    border-color: var(--border);
+    background: var(--surface2);
+    color: var(--text-muted);
+}
+.tm-done-btn.tm-done-complete:disabled {
+    border-color: #29c76f;
+    color: #29c76f;
+    background: transparent;
+    opacity: 1;
+}
+
+.tm-done-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    max-width: 340px;
+}
+.tm-done-reason {
+    font-size: 0.74rem;
+    line-height: 1.3;
+    color: var(--text-muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.tm-link-btn {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+.tm-link-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.tm-issues-count {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--danger);
+    color: #fff;
+    font-size: 0.66rem;
+    text-align: center;
+    text-decoration: none;
+}
+.tm-issues-count[hidden] { display: none; }
+
+/* Short windows: keep the bar on one row by dropping the explanation to a
+   tooltip and the screen-reader description (aria-describedby). */
+@media (max-width: 1450px) {
+    .tm-done-reason { -webkit-line-clamp: 1; max-width: 220px; }
+}
+@media (max-width: 1250px) {
+    .tm-done-reason { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .tm-done-btn { height: 34px; padding: 0 14px; }
+}
+
+/* ── Severity badges ──────────────────────────────── */
+.tm-sev {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    flex: none;
+}
+.tm-sev-error      { background: rgba(255,51,85,0.18);  color: #ff6680; }
+.tm-sev-warning    { background: rgba(255,179,0,0.16);  color: var(--warning); }
+.tm-sev-suggestion { background: rgba(80,220,255,0.12); color: #7fdcff; }
+
+/* ── Issues panel ─────────────────────────────────── */
+.tm-issues-panel {
+    display: flex;
+    flex-direction: column;
+    max-height: 38%;
+    min-height: 120px;
+    flex: none;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+.tm-issues-panel[hidden] { display: none; }
+
+.tm-issues-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+.tm-issues-head strong { font-size: 0.82rem; }
+.tm-issues-spacer { flex: 1; }
+
+.tm-issues-tabs { display: flex; gap: 2px; }
+.tm-issues-tab {
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    padding: 3px 8px;
+    cursor: pointer;
+}
+.tm-issues-tab span { font-weight: 700; margin-left: 2px; }
+.tm-issues-tab-on { border-color: var(--border); background: var(--surface2); color: var(--text); }
+.tm-issues-tab:focus-visible { outline: 2px solid var(--accent); }
+
+.tm-issues-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    background: rgba(255,179,0,0.06);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+
+.tm-issues-list {
+    list-style: none;
+    margin: 0;
+    padding: 4px 0;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.tm-issue-row {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    grid-template-areas: "sev where title" "msg msg msg";
+    gap: 2px 8px;
+    align-items: center;
+    width: 100%;
+    padding: 6px 12px;
+    border: none;
+    border-left: 3px solid transparent;
+    background: none;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+.tm-issue-row .tm-sev { grid-area: sev; }
+.tm-issue-row:hover { background: var(--surface2); }
+.tm-issue-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tm-issue-row-on { border-left-color: var(--accent); background: var(--surface2); }
+.tm-issue-where { grid-area: where; font-family: 'Courier New', monospace; font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; }
+.tm-issue-title { grid-area: title; font-size: 0.78rem; font-weight: 600; }
+.tm-issue-msg {
+    grid-area: msg;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tm-issue-ack {
+    font-size: 0.64rem;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 6px;
+}
+.tm-issues-empty { padding: 14px; margin: 0; font-size: 0.78rem; color: var(--text-muted); }
+
+/* ── The explanation inside the card ──────────────── */
+.tm-issue-callout {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    border-left-width: 4px;
+    background: var(--surface2);
+}
+.tm-issue-callout-error      { border-left-color: var(--danger); }
+.tm-issue-callout-warning    { border-left-color: var(--warning); }
+.tm-issue-callout-suggestion { border-left-color: #7fdcff; }
+.tm-issue-callout-resolved   { border-left-color: #29c76f; }
+.tm-callout-head { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; flex-wrap: wrap; }
+.tm-callout-msg, .tm-callout-action { margin: 6px 0 0; font-size: 0.78rem; line-height: 1.45; }
+.tm-callout-action { color: var(--text-muted); }
+.tm-callout-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* The field a problem points at, highlighted long enough to find. */
+.tm-field-flash {
+    animation: tm-field-flash 2.4s ease-out;
+    outline: 2px solid var(--warning) !important;
+    outline-offset: 2px;
+}
+@keyframes tm-field-flash {
+    0%, 30% { box-shadow: 0 0 0 4px rgba(255,179,0,0.45); }
+    100% { box-shadow: 0 0 0 0 rgba(255,179,0,0); }
+}
+@media (prefers-reduced-motion: reduce) { .tm-field-flash { animation: none; } }
+
+/* ── Hint line under the open card ────────────────── */
+.tm-quality-hint {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    color: var(--text-muted);
+}
+.tm-hint-issue {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px 2px 2px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.7rem;
+    cursor: pointer;
+}
+.tm-hint-issue:hover { border-color: var(--text-muted); }
+.tm-hint-issue:focus-visible { outline: 2px solid var(--accent); }
+
+/* ── Marks ────────────────────────────────────────── */
+.tm-mark-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    font-size: 0.68rem;
+    color: var(--text);
+}
+.tm-mark-flag { border-color: rgba(255,179,0,0.6); color: var(--warning); }
+.tm-mark-ok { border-color: rgba(41,199,111,0.6); color: #29c76f; }
+.tm-marks-btn-has { color: var(--warning); }
+.tm-row-flag { color: var(--warning); }
+
+.tm-marks-popover {
+    position: fixed;
+    z-index: 900;
+    width: 250px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 14px 36px rgba(0,0,0,0.6);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.78rem;
+}
+.tm-marks-popover label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.tm-marks-popover input { accent-color: var(--accent); }
+.tm-marks-popover .tm-tl-menu-title { margin: 4px 0 0; }
+.tm-marks-sub { padding-left: 22px; }
+.tm-marks-sub[hidden] { display: none !important; }
+
+/* ── Project rules & glossary ─────────────────────── */
+.tm-rule-grid { display: grid; gap: 6px; font-size: 0.76rem; color: var(--text-muted); margin-bottom: 6px; }
+.tm-rule-grid label { display: flex; align-items: center; gap: 8px; }
+.tm-rule-grid input { accent-color: var(--accent); }
+.tm-glossary-list { list-style: none; margin: 6px 0; padding: 0; font-size: 0.78rem; display: flex; flex-direction: column; gap: 3px; }
+.tm-glossary-list li { display: flex; align-items: center; gap: 6px; }
+.tm-glossary-list em { color: var(--text-muted); font-size: 0.72rem; }
+
+/* ── Dialogs ──────────────────────────────────────── */
+.tm-choice-modal, .tm-modal-backdrop > form.tm-modal {
+    max-width: 640px;
+    max-height: calc(100vh - 60px);
+    overflow-y: auto;
+    text-align: left;
+    padding: 24px 26px;
+}
+.tm-choice-modal .tm-modal-msg p { margin: 0 0 10px; }
+.tm-modal-note { color: var(--text-muted); font-size: 0.8rem; }
+.tm-diff-list { margin: 6px 0 10px; padding-left: 18px; font-size: 0.78rem; }
+.tm-diff-list li { margin-bottom: 4px; }
+.tm-diff-old { color: #ff8a9c; text-decoration: line-through; text-decoration-thickness: 1px; }
+.tm-diff-new { color: #29c76f; }
+.tm-preview-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; margin: 6px 0 10px; }
+.tm-preview-table th, .tm-preview-table td { border-bottom: 1px solid var(--border); padding: 5px 6px; text-align: start; vertical-align: top; }
+.tm-preview-table th { color: var(--text-muted); font-weight: 600; }
+.tm-preview-table .tm-diff-old { text-decoration: none; }
+.tm-history-list { list-style: none; margin: 8px 0; padding: 0; max-height: 46vh; overflow-y: auto; }
+.tm-history-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 4px;
+    background: var(--surface2);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+.tm-history-row span { color: var(--text-muted); font-size: 0.72rem; }
+.tm-history-row:hover, .tm-history-row:focus-visible { border-color: var(--text-muted); outline: none; }
+.tm-done-summary { margin: 4px 0 10px; padding-left: 18px; font-size: 0.82rem; line-height: 1.6; }
+
+/* The save status opens the version history. */
+#saveStatus[role="button"] { cursor: pointer; }
+#saveStatus[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Import & export ──────────────────────────────── */
+.tm-transfer-modal { max-width: 720px; }
+.tm-transfer-modal p { margin: 0 0 10px; }
+.tm-transfer-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.8rem; margin-bottom: 10px; }
+.tm-transfer-warn { color: var(--warning); }
+.tm-transfer-error { color: #ff8a9c; }
+.tm-transfer-problems { margin: 0 0 10px; font-size: 0.78rem; }
+.tm-transfer-problems summary { cursor: pointer; color: var(--warning); font-weight: 600; }
+.tm-transfer-problems ul { margin: 6px 0; padding-left: 18px; max-height: 160px; overflow-y: auto; }
+.tm-transfer-modes { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin: 0 0 12px; display: grid; gap: 6px; font-size: 0.8rem; }
+.tm-transfer-modes legend { padding: 0 4px; color: var(--text-muted); font-size: 0.72rem; }
+.tm-transfer-modes label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tm-transfer-modes input[type="radio"] { accent-color: var(--accent); }
+.tm-transfer-title { flex: 1; min-width: 180px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 3px 8px; }
+.tm-transfer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; font-size: 0.78rem; color: var(--text-muted); }
+.tm-transfer-grid label { display: flex; flex-direction: column; gap: 4px; }
+.tm-transfer-grid label[hidden] { display: none; }
+.tm-transfer-status { font-size: 0.8rem; }
+.tm-transfer-losses { margin: 0 0 10px; padding-left: 18px; color: var(--warning); font-size: 0.76rem; }
+.tm-export-preview { max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: #000; margin-bottom: 12px; }
+.tm-export-cue { margin-bottom: 8px; }
+.tm-export-cue .tm-mono { font-size: 0.68rem; color: var(--text-muted); }
+.tm-export-screen { text-align: center; color: #fff; font-size: 0.95rem; line-height: 1.35; text-shadow: 0 0 4px #000, 0 1px 2px #000; padding: 4px 0; }
+.tm-export-plain { white-space: pre-wrap; color: var(--text); font-size: 0.78rem; margin: 0; }
+.tm-mono { font-family: 'Courier New', monospace; }

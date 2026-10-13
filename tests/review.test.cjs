@@ -109,14 +109,18 @@ test('the cue filters can isolate suggested and flagged lines', async () => {
         cue({ id: 3 }),
     ]);
 
+    // Arrays built inside the vm context belong to another realm, so they are
+    // compared as JSON rather than by prototype.
+    const shown = () => JSON.parse(app.run('JSON.stringify(visibleCues().map(([ev]) => ev.id))'));
+
     app.nodes.get('cueFilter').value = 'suggested';
-    assert.deepEqual(app.run('visibleCues().map(([ev]) => ev.id)'), [1]);
+    assert.deepEqual(shown(), [1]);
 
     app.nodes.get('cueFilter').value = 'flagged';
-    assert.deepEqual(app.run('visibleCues().map(([ev]) => ev.id)'), [2]);
+    assert.deepEqual(shown(), [2]);
 
     app.nodes.get('cueFilter').value = 'all';
-    assert.deepEqual(app.run('visibleCues().map(([ev]) => ev.id)'), [1, 2, 3]);
+    assert.deepEqual(shown(), [1, 2, 3]);
 });
 
 // ── What travels to the server ────────────────────
@@ -142,7 +146,62 @@ test('a revisor’s flags and note travel with the cue', async () => {
     assert.equal(sent.reviewNote, 'wrong term');
 });
 
+// ── Cue identity across saves ─────────────────────
+// The server matches cues to stored rows by id, which is what keeps a
+// revisor's suggestion on the line it was written for when lines are inserted
+// or removed above it.
+
+test('every cue is sent with its id, so the server can match rows by identity', async () => {
+    const app = await loaded([cue({ id: 7 }), cue({ id: 9, suggestedText: 'theirs', suggestionState: 1 })]);
+
+    app.run("events.splice(1, 0, { id: nextTempId--, startTime: '00:00:03,500', endTime: '00:00:04,000', originalText: '', translatedText: 'new' }); markDirty(); doSave();");
+    const ids = app.body(1).events.map(ev => ev.id);
+    assert.deepEqual(ids, [7, -1, 9]);
+});
+
+test('a new cue adopts its stored id, so the next save updates rather than re-adds it', async () => {
+    const app = await loaded([cue({ id: 7 })]);
+
+    app.run("events.push({ id: nextTempId--, startTime: '00:00:05,000', endTime: '00:00:06,000', originalText: '', translatedText: 'new' }); activeId = -1; markDirty(); doSave();");
+    app.requests[1].resolve(ok({ success: true, revision: 2, assigned: [{ temp: -1, id: 41 }] }));
+    await settle();
+
+    assert.equal(app.run('events[1].id'), 41);
+    assert.equal(app.run('activeId'), 41);
+
+    app.run("events[1].translatedText = 'newer'; markDirty(); doSave();");
+    assert.deepEqual(app.body(2).events.map(ev => ev.id), [7, 41]);
+});
+
+test('an undo back to a temporary id still saves against the stored row', async () => {
+    const app = await loaded([cue({ id: 7 })]);
+
+    app.run("events.push({ id: nextTempId--, startTime: '00:00:05,000', endTime: '00:00:06,000', originalText: '', translatedText: 'new' }); markDirty(); doSave();");
+    app.requests[1].resolve(ok({ success: true, revision: 2, assigned: [{ temp: -1, id: 41 }] }));
+    await settle();
+
+    // A snapshot taken before the save still holds the temporary id.
+    app.run("events[1].id = -1; markDirty(); doSave();");
+    assert.equal(app.body(2).events[1].id, 41);
+});
+
+test('temporary ids never collide with those in a recovered draft', async () => {
+    const app = await loaded([cue({ id: 7 }), cue({ id: -4 })]);
+    assert.ok(app.run('nextTempId') < -4);
+});
+
 // ── Role ──────────────────────────────────────────
+
+test('a revisor cannot change the shape of the track or reword a line', async () => {
+    const app = await loaded([cue({ id: 1 }), cue({ id: 2 })], 'Revisor');
+
+    app.run('selectedIds = new Set([2]); activeId = 2; deleteSelectedCue(); duplicateSelectedCue(); mergeWithPrevious();');
+    assert.equal(app.run('events.length'), 2);
+    assert.equal(app.run('translatorOnly()'), false);
+
+    const translator = await loaded([cue({ id: 1 })], 'Translator');
+    assert.equal(translator.run('translatorOnly()'), true);
+});
 
 test('the editor knows which seat it is in', async () => {
     const asTranslator = await loaded([cue()], 'Translator');

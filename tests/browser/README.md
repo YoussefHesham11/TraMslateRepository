@@ -31,6 +31,13 @@ dotnet run --no-launch-profile
 | `layout-check.cjs` | Asserts at six window sizes that the timeline never covers the cue list and the open card always fits. |
 | `workflow-check.cjs` | Steps through cues as a translator does; checks visibility, focus, typing, timeline clicks and profile switching. |
 | `perf.cjs` | Render, selection, keystroke and quality-sweep timings at 1500 cues, with a budget that fails. |
+| `timeline-check.cjs` | Serves the repo over HTTP so the sample media really decodes, then drives the timeline with real mouse input: waveform and shot-change analysis, boxes on the wave, the centre playhead, drawing, dragging and resizing subtitles, snapping, timing warnings, the toolbar and the analysis cache. |
+| `timeline-shot.cjs` | Screenshot with the timeline fully analysed. Set `TM_SAMPLE_VIDEO` (an upload's file name) before `build-harness.cjs` to use a longer film than the default smallest upload. |
+| `serve.cjs` | The throwaway HTTP server (with byte ranges) the two above use. |
+| `workspace-check.cjs` | Issues panel → exact field → explanation → previewed fix → undo; waivers, marks, Done gating and completion of an exact version, edits during Done, reopening after edits, save failure/retry, lost response, two-tab conflict, refresh recovery, history. Uses the revision-aware stand-in server in `harness-boot.js` (`window.__server`). |
+| `transfer-check.cjs` | Import preview, malformed entries, encodings, append/replace with recovery copy; export draft marking, format losses, bilingual output, blocked unplayable timing, failed export, honest download message. |
+| `tools-check.cjs` | Previewed shift, two-point sync, frame-rate conversion, bulk actions, find & replace with locked source, permitted overlaps, spellcheck languages, J and Alt+Shift+PageDown as real keys, follow-playback off. |
+| `server-tour.cjs` | Live app + SQL Server: save replay without duplicates, stale and racing saves, wrong timing stored, completion rules, status cannot shortcut Done, checkpoints, 401 for the API, token refresh, Shortcuts page, Save a copy, import into a new project. Part of `--app`. |
 | `app-tour.cjs` | Signs in, creates a project, saves to SQL Server, reloads, and proves a stale save is refused without data loss. Screenshots to `shots/`. |
 | `clean-tour-data.cjs` | Removes projects a failed tour run stranded. |
 | `probe.cjs`, `probe-live.cjs` | Ad-hoc diagnostics: print element heights, or evaluate an arbitrary expression in the harness or the live editor. |

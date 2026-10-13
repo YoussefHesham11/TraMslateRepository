@@ -88,6 +88,29 @@
         { id: 'openSettings',      category: 'navigation', label: 'Open keyboard shortcuts settings', description: 'Go to the Keyboard Shortcuts settings page.', default: 'Ctrl+/', allowInInput: false },
 
         // ── Translation ──
+        // ── Checking & workflow ──
+        { id: 'nextIssue',        category: 'navigation', label: 'Go to next problem',        description: 'Open the next validation problem: its subtitle, field and explanation.', default: 'F8',       allowInInput: true },
+        { id: 'prevIssue',        category: 'navigation', label: 'Go to previous problem',    description: 'Open the previous validation problem.',            default: 'Shift+F8', allowInInput: true },
+        { id: 'toggleIssuesPanel',category: 'navigation', label: 'Show / hide issues',        description: 'Open or close the issues panel.',                   default: 'Alt+I',    allowInInput: false },
+        { id: 'nextUnfinished',   category: 'navigation', label: 'Next unfinished subtitle',  description: 'Untranslated, marked for more work, or with an open question.', default: 'F9', allowInInput: true },
+        { id: 'prevUnfinished',   category: 'navigation', label: 'Previous unfinished subtitle', description: 'The previous untranslated, marked or questioned subtitle.', default: 'Shift+F9', allowInInput: true },
+        { id: 'nextFlagged',      category: 'navigation', label: 'Next flagged subtitle',     description: 'Marked for more work, or flagged by the revisor.', default: 'Alt+PageDown', allowInInput: true },
+        { id: 'prevFlagged',      category: 'navigation', label: 'Previous flagged subtitle', description: 'The previous marked or revisor-flagged subtitle.',  default: 'Alt+PageUp',   allowInInput: true },
+        { id: 'nextBookmark',     category: 'navigation', label: 'Next bookmark',             description: 'Jump to the next bookmarked subtitle.',            default: 'F2',       allowInInput: true },
+        { id: 'prevBookmark',     category: 'navigation', label: 'Previous bookmark',         description: 'Jump to the previous bookmarked subtitle.',        default: 'Shift+F2', allowInInput: true },
+        { id: 'toggleBookmark',   category: 'translation', label: 'Bookmark / unbookmark',    description: 'Bookmark the selected subtitle to come back to.',  default: 'Alt+B',    allowInInput: false },
+        { id: 'markReviewed',     category: 'translation', label: 'Mark reviewed / not reviewed', description: 'Toggle the selected subtitle\'s review mark.', default: 'Alt+V',    allowInInput: false },
+        { id: 'openMarks',        category: 'translation', label: 'Edit marks',               description: 'Open the flags, question, bookmark and review marks for the selected subtitle.', default: 'Alt+M', allowInInput: false },
+        { id: 'versionHistory',   category: 'file',        label: 'Version history',          description: 'Browse, preview and restore earlier versions.',   default: 'Alt+H',    allowInInput: false },
+        { id: 'bulkActions',      category: 'editing',  label: 'Bulk actions on selected',  description: 'Change all selected subtitles at once (marks, status, timing, delete), with a preview.', default: 'Alt+Shift+B', allowInInput: false },
+        { id: 'moveCueUp',        category: 'editing',  label: 'Move subtitle up the list',  description: 'Swap the selected subtitle with the one above (times unchanged).', default: 'Alt+Shift+PageUp', allowInInput: false },
+        { id: 'moveCueDown',      category: 'editing',  label: 'Move subtitle down the list', description: 'Swap the selected subtitle with the one below (times unchanged).', default: 'Alt+Shift+PageDown', allowInInput: false },
+        { id: 'jumpBack',         category: 'playback', label: 'Short jump back',            description: 'Jump back by the short-jump amount set in the timeline options.', default: 'J', allowInInput: false },
+        { id: 'jumpForward',      category: 'playback', label: 'Short jump forward',         description: 'Jump forward by the short-jump amount set in the timeline options.', default: 'L', allowInInput: false },
+        { id: 'loopSelected',     category: 'playback', label: 'Loop the selected subtitle', description: 'Loop it, padded by the run-up setting; again to stop.', default: 'Ctrl+Alt+L', allowInInput: false },
+        { id: 'twoPointSync',     category: 'sync',     label: 'Sync with two points',       description: 'Correct drifting timing from two subtitles whose times you know.', default: '', allowInInput: false },
+        { id: 'convertFrameRate', category: 'sync',     label: 'Convert frame rate',         description: 'Re-time every subtitle for a video converted to another frame rate.', default: '', allowInInput: false },
+        { id: 'markDone',         category: 'file',        label: 'Done',                     description: 'Check, save and mark the current version complete.', default: '',  allowInInput: false },
         { id: 'copySource', category: 'translation', label: 'Copy source into translation', description: 'Copy the selected cue\'s source text into its translation.', default: 'Ctrl+D', allowInInput: true },
 
         // ── Synchronization ──

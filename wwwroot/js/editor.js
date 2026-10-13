@@ -46,7 +46,9 @@ function matchesFilter(ev, index) {
         && (filter !== 'issues' || issuesAt(index ?? events.indexOf(ev)).length > 0)
         && (!filter.startsWith('status-') || (ev.status || 0) === Number(filter.slice(7)))
         && (filter !== 'suggested' || hasSuggestion(ev))
-        && (filter !== 'flagged' || isFlagged(ev));
+        && (filter !== 'flagged' || isFlagged(ev))
+        // Filters built on validation and workflow marks live in workspace.js.
+        && (typeof TmWorkspace === 'undefined' || TmWorkspace.matches(filter, ev));
 }
 
 // Touches only the rows whose state actually changes — the ones currently
@@ -72,7 +74,10 @@ function applySelectionClasses(root, itemSelector, activeClass, selectedClass) {
 
 function updateWorkspace() {
     const done = events.filter(ev => ev.translatedText?.trim()).length;
-    document.getElementById('cueProgress').textContent = `${done} of ${events.length} translated`;
+    const reviewed = events.filter(ev => (ev.reviewState | 0) === 1 || (ev.status | 0) === 3).length;
+    const clean = typeof TmWorkspace !== 'undefined' ? TmWorkspace.cleanCount?.() : null;
+    document.getElementById('cueProgress').textContent = `${done} of ${events.length} translated · ${reviewed} reviewed`
+        + (clean != null ? ` · ${clean} without errors` : '');
     document.getElementById('translationProgress').value = events.length ? done / events.length * 100 : 0;
     paintSuggestionsToggle();
     const count = document.getElementById('cueCount');
@@ -81,7 +86,9 @@ function updateWorkspace() {
     document.getElementById('cueIssues').textContent = `${flagged} with quality issues`;
     updateHistoryButtons();
     const open = eventsList.querySelector('.tm-cue-item-open');
-    if (open) {
+    if (open && typeof TmWorkspace !== 'undefined') {
+        TmWorkspace.paintCardHint(open, events.findIndex(cue => cue.id === Number(open.dataset.id)));
+    } else if (open) {
         const index = events.findIndex(cue => cue.id === Number(open.dataset.id));
         let hint = open.querySelector('.tm-quality-hint');
         if (!hint) { hint = document.createElement('p'); hint.className = 'tm-quality-hint'; open.appendChild(hint); }
@@ -191,7 +198,8 @@ let peaksStatus    = 'idle';   // idle | working | ready | failed
 let peaksMessage   = '';
 let waveGain       = 1;        // vertical scale only — never touches playback
 let waveView       = 'both';   // both | peak | rms | bars
-let showSpeech     = true;
+let waveScale      = 'db';     // db | linear
+let showSpeech     = false;  // faint wash behind detected dialogue
 let snapToAudio    = true;
 let scrubAudio     = false;
 let loopRange      = null;     // {start, end} while the loop button is armed
@@ -200,10 +208,9 @@ let hoverSecs      = null;
 let scrubbing      = false;
 let wasPlayingBeforeScrub = false;
 
-// The strip divides into three lanes: a timecode ruler, the waveform, and a
-// lane of cue blocks along the bottom. The blocks used to be drawn across
-// the whole strip, which put every cue on top of the audio it described.
-const RULER_H = 22, SPEECH_STRIP_H = 5;
+// The strip is a timecode ruler over one lane in which the subtitle boxes sit
+// directly on the waveform, so each box frames the audio it belongs to.
+const RULER_H = 24;
 
 const TL_PREFS_KEY = 'tm-timeline-prefs';
 function loadTimelinePrefs() {
@@ -214,6 +221,7 @@ function saveTimelinePrefs() {
     try {
         localStorage.setItem(TL_PREFS_KEY, JSON.stringify({
             waveGain, waveView, showSpeech, snapToAudio, scrubAudio, prerollSecs,
+            showBlockText, snapToCuts, waveScale, followPlayback, jumpSeconds,
             volume: video ? video.volume : 1, muted: video ? video.muted : false,
         }));
     } catch { /* storage unavailable */ }
@@ -276,6 +284,30 @@ function loadProfile() {
     return SubtitleCore.normaliseProfile(SubtitleCore.DEFAULT_PROFILE);
 }
 
+// Everything project-wide that the editor needs to resume exactly where it
+// was — validation profile, rules, glossary, frame rate — travels with the
+// project on save. Other modules keep their parts in workspaceSettings.
+let workspaceSettings = {};
+// What the server said on load, for modules that start after the load landed.
+let loadPayload = null;
+function projectSettings() {
+    return { version: 1, profile: deliveryProfile, fps, ...workspaceSettings };
+}
+function applyProjectSettings(settings) {
+    let s = settings;
+    if (typeof s === 'string') { try { s = JSON.parse(s); } catch { return; } }
+    if (!s || typeof s !== 'object') return;
+    const { version, profile, fps: savedFps, ...rest } = s;
+    if (profile) { deliveryProfile = SubtitleCore.normaliseProfile(profile); storeProfile(); }
+    if (Number.isFinite(+savedFps) && +savedFps > 0) {
+        fps = +savedFps;
+        const select = document.getElementById('fpsSelect');
+        if (select && [...(select.options || [])].some(o => +o.value === fps)) select.value = String(fps);
+    }
+    workspaceSettings = rest;
+    if (typeof TmWorkspace !== 'undefined') TmWorkspace.onSettings?.(rest);
+}
+
 function storeProfile() {
     try { localStorage.setItem(PROFILE_KEY, JSON.stringify(deliveryProfile)); }
     catch { /* storage unavailable; the profile simply will not persist */ }
@@ -284,7 +316,7 @@ function storeProfile() {
 let deliveryProfile = loadProfile();
 
 function charCountDisplay(text) {
-    if (!text) return '0 / 42';
+    if (!text) return `0 / ${deliveryProfile.maxCharsPerLine}`;
     const lines   = text.split('\n');
     const longest = Math.max(...lines.map(l => l.length));
     const lineCount = lines.length;
@@ -348,8 +380,30 @@ if (video) {
         }
     });
 
-    video.addEventListener('play',  () => { btnPlay.innerHTML = '<i class="bi bi-pause-fill"></i>'; autoPauseArmed = true; });
-    video.addEventListener('pause', () => btnPlay.innerHTML = '<i class="bi bi-play-fill"></i>');
+    const paintPlay = () => {
+        const icon = video.paused ? '<i class="bi bi-play-fill"></i>' : '<i class="bi bi-pause-fill"></i>';
+        btnPlay.innerHTML = icon;
+        const tl = document.getElementById('tlPlayPause');
+        if (tl) tl.innerHTML = icon;
+    };
+    video.addEventListener('play', () => {
+        paintPlay();
+        autoPauseArmed = true;
+        // Hand the view to the playhead: whatever distance separates them
+        // glides away over the next few frames instead of jumping.
+        viewOffset = viewCentre - video.currentTime;
+        viewTarget = null;
+        kickView();
+    });
+    video.addEventListener('pause', () => { paintPlay(); scheduleRulerRedraw(); });
+    // A seek from anywhere but the strip (buttons, keys, the cue list) brings
+    // the playhead back to the centre; a click on the strip leaves the view
+    // where the user was looking.
+    video.addEventListener('seeking', () => {
+        if (timelineSeek) { timelineSeek = false; scheduleRulerRedraw(); return; }
+        if (playing()) { viewOffset = viewCentre - video.currentTime; kickView(); }
+        else steerView(video.currentTime);
+    });
 
     btnPlay.addEventListener('click', () => video.paused ? video.play() : video.pause());
     btnSkipBack.addEventListener('click', () => video.currentTime = Math.max(0, video.currentTime - 5));
@@ -367,12 +421,13 @@ if (video) {
     // where a typical cue is comfortably readable rather than fitting the
     // whole track (which turns a long video into unreadable slivers) —
     // setZoom() still clamps up to fit-width for short clips.
-    video.addEventListener('loadedmetadata', () => setZoom(DEFAULT_PX_PER_SEC, 0));
+    video.addEventListener('loadedmetadata', () => setZoom(defaultZoom(), 0));
 }
 
 fpsSelect.addEventListener('change', () => {
     fps = parseFloat(fpsSelect.value);
     renderEvents();
+    if (loaded) markDirty();
 });
 
 // ══════════════════════════════════════════════════
@@ -486,7 +541,9 @@ function toggleLoopSelected() {
     }
     const ev = events.find(x => x.id === activeId);
     if (!ev || !video) { alert('Select a cue to loop.'); return; }
-    loopRange = { start: tcToSecs(ev.startTime), end: tcToSecs(ev.endTime) };
+    // Padded by the run-up setting on both sides, so the line is heard
+    // arriving and leaving, not cut mid-breath.
+    loopRange = { start: Math.max(0, tcToSecs(ev.startTime) - prerollSecs), end: tcToSecs(ev.endTime) + prerollSecs };
     playingRangeEnd = null;
     btn?.classList.add('tm-toggle-on');
     btn?.setAttribute('aria-pressed', 'true');
@@ -851,6 +908,9 @@ Shortcuts.on('moveStartEarlier', () => moveStart(-1));
 Shortcuts.on('moveStartLater',   () => moveStart(1));
 Shortcuts.on('setOutByReadingSpeed', setOutByReadingSpeed);
 Shortcuts.on('seekBackHalfSec', () => rewindSeconds(0.5));
+Shortcuts.on('jumpBack',    () => rewindSeconds(jumpSeconds));
+Shortcuts.on('jumpForward', () => fastForwardSeconds(jumpSeconds));
+Shortcuts.on('loopSelected', () => toggleLoopSelected());
 Shortcuts.on('seekFwdHalfSec',  () => fastForwardSeconds(0.5));
 Shortcuts.on('seekToEventStart',    seekToEventStart);
 Shortcuts.on('seekToPreviousStart', seekToPreviousStart);
@@ -896,7 +956,49 @@ function updateOverlay() {
 //  TIMELINE
 // ══════════════════════════════════════════════════
 
-// ── Zoom & scroll ────────────────────────────────────
+// ── View model ────────────────────────────────────────
+/* The strip is a window onto the track centred on `viewCentre`. While the
+   video plays the centre is the playhead, so the playhead stands still in the
+   middle and the audio and subtitles flow under it. While paused the view can
+   be panned freely (wheel, overview bar, dragging the empty strip) and the
+   playhead is drawn wherever it actually is.
+
+   Nothing here scrolls natively. The canvas is the size of the visible strip
+   and is redrawn from the model; the cue blocks are real elements, but only
+   those near the view are rendered, inside a layer moved with a transform.
+   Native scrolling quantised to whole pixels and could not be centred on the
+   playhead without hacks, which is what made the old strip judder. */
+let viewCentre   = 0;
+let viewOffset   = 0;      // remaining glide distance (s) toward the heading
+let viewTarget   = null;   // where a paused glide is heading
+let viewRaf      = 0;
+let timelineSeek = false;  // the next 'seeking' came from the strip itself
+let renderedWindow = null; // { from, to, origin, pps } of the rendered blocks
+let snapGuide    = null;   // { t, kind } while a drag sits on a snap point
+let drawDraft    = null;   // { anchor, start, end } while drawing a new cue
+let panState     = null;   // { startX, startCentre } while grab-panning
+let rulerScrub   = null;   // { wasPlaying } while scrubbing on the ruler
+let overviewDrag = false;
+let shotCuts     = [];
+let shotsStatus  = 'idle'; // idle | working | ready | failed
+let shotsMessage = '';
+let shotsProgress = 0;
+let showBlockText = true;
+let followPlayback = true;   // keep the playhead centred while playing
+let jumpSeconds = 2;         // the configurable short jump (J / L)
+let snapToCuts   = true;
+
+const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : fn => setTimeout(fn, 16);
+const BLOCK_PAD_Y = 3;
+const SHOT_WINDOW_FRAMES = 12;   // an edge this close to a cut should be on it
+const OUT_BEFORE_CUT_FRAMES = 2; // where an out-time belongs relative to a cut
+
+function viewWidth()  { return timelineScroll?.clientWidth || 0; }
+function viewHeight() { return timelineScroll?.clientHeight || 0; }
+function viewStartSecs() { return viewCentre - viewWidth() / 2 / pxPerSecond; }
+function xOfTime(t) { return (t - viewStartSecs()) * pxPerSecond; }
+function playing() { return !!video && !video.paused && !video.ended; }
+
 // How much time the timeline has to cover: the video, plus any cue that runs
 // past its end, so no cue can ever sit outside the drawn strip.
 function timelineSpan() {
@@ -908,127 +1010,199 @@ function timelineSpan() {
     return span;
 }
 
+function clampView() {
+    const span = timelineSpan();
+    if (!Number.isFinite(viewCentre)) viewCentre = 0;
+    viewCentre = Math.max(0, Math.min(viewCentre, span || 0));
+}
+
 function fitZoom() {
     const span = timelineSpan();
-    const width = timelineScroll?.clientWidth;
+    const width = viewWidth();
     if (!span || !Number.isFinite(width) || width <= 0) return MIN_PX_PER_SEC;
     return Math.max(MIN_PX_PER_SEC, width / span);
 }
 
-function setZoom(next, anchorSecs) {
-    if (!timelineSpan()) return;
+// Ten seconds across the strip: enough to read every box on a dense scene,
+// enough context to see the next line coming.
+function defaultZoom() {
+    const width = viewWidth();
+    return width > 0 ? width / 10 : DEFAULT_PX_PER_SEC;
+}
+
+/* Changes the zoom. With `centreOn` the view is centred there; otherwise the
+   centre stays put, so zooming never loses the playhead. */
+function setZoom(next, centreOn) {
     const clamped = Math.min(MAX_PX_PER_SEC, Math.max(fitZoom(), next));
     if (!Number.isFinite(clamped) || clamped <= 0) return;
-    const anchor = anchorSecs ?? video?.currentTime ?? 0;
     pxPerSecond = clamped;
-    // Set scroll position before drawing so the ruler/waveform redraw already
-    // reflects the new viewport instead of flashing the old one for a frame.
-    timelineScroll.scrollLeft = Math.max(0, anchor * pxPerSecond - timelineScroll.clientWidth / 2);
+    if (centreOn != null && !playing()) { viewCentre = centreOn; viewOffset = 0; viewTarget = null; }
+    paintZoomSlider();
     drawTimelineRuler();
-    renderTimelineBlocks(); // block positions depend on pxPerSecond
+}
+
+/* Zooms about a point on screen, keeping the time under it where it is. */
+function zoomAt(next, t, screenX) {
+    const clamped = Math.min(MAX_PX_PER_SEC, Math.max(fitZoom(), next));
+    if (!Number.isFinite(clamped) || clamped <= 0) return;
+    pxPerSecond = clamped;
+    if (!playing()) viewCentre = t - (screenX - viewWidth() / 2) / pxPerSecond;
+    paintZoomSlider();
+    drawTimelineRuler();
+}
+
+// The zoom slider is logarithmic: each step of it is the same proportional
+// change, from the whole film down to single frames.
+function paintZoomSlider() {
+    const slider = document.getElementById('tlZoom');
+    if (!slider) return;
+    const lo = Math.log(fitZoom()), hi = Math.log(MAX_PX_PER_SEC);
+    slider.value = hi > lo ? Math.round((Math.log(pxPerSecond) - lo) / (hi - lo) * 1000) : 0;
+}
+function zoomFromSlider(value) {
+    const lo = Math.log(fitZoom()), hi = Math.log(MAX_PX_PER_SEC);
+    setZoom(Math.exp(lo + (hi - lo) * (value / 1000)));
+}
+
+// ── Gliding the view ────────────────────────────────
+/* One animation loop drives every view movement. While playing it holds the
+   playhead in the centre; any remaining offset (from a seek, or from pressing
+   play with the playhead off-centre) decays over a few frames, so the strip
+   glides into place instead of jumping. */
+function kickView() { if (!viewRaf) viewRaf = raf(tickView); }
+
+function tickView() {
+    viewRaf = 0;
+    if (playing() && !followPlayback) {
+        const x = xOfTime(video.currentTime);
+        if (x < 0 || x > viewWidth() - 20) { viewOffset = 0; viewCentre = video.currentTime + (viewWidth() / 2 - 40) / pxPerSecond; }
+        drawTimelineRuler();
+        viewRaf = raf(tickView);
+        return;
+    }
+    const heading = playing() ? video.currentTime : viewTarget;
+    if (heading == null) return;
+    viewOffset *= 0.72;
+    if (Math.abs(viewOffset) * pxPerSecond < 0.5) viewOffset = 0;
+    viewCentre = heading + viewOffset;
+    drawTimelineRuler();
+    if (playing() || viewOffset !== 0) viewRaf = raf(tickView);
+    else viewTarget = null;
+}
+
+/* Glides a paused view so `t` lands in the centre. */
+function steerView(t) {
+    if (playing()) return;
+    viewTarget = t;
+    viewOffset = viewCentre - t;
+    kickView();
+}
+
+function stopGlide() { viewOffset = 0; viewTarget = null; }
+
+function panBy(seconds) {
+    if (playing()) { seekTo(video.currentTime + seconds); return; }
+    stopGlide();
+    viewCentre += seconds;
+    scheduleRulerRedraw();
 }
 
 let rulerRedrawScheduled = false;
 function scheduleRulerRedraw() {
     if (rulerRedrawScheduled) return;
     rulerRedrawScheduled = true;
-    requestAnimationFrame(() => { rulerRedrawScheduled = false; drawTimelineRuler(); });
+    raf(() => { rulerRedrawScheduled = false; drawTimelineRuler(); });
 }
-timelineScroll?.addEventListener('scroll', scheduleRulerRedraw);
 
 function keepPlayheadVisible() {
-    if (!timelineScroll) return;
-    const x = video.currentTime * pxPerSecond;
-    const viewW = timelineScroll.clientWidth;
-    const left = timelineScroll.scrollLeft;
-    if (x < left + 30 || x > left + viewW - 30) {
-        timelineScroll.scrollLeft = Math.max(0, x - viewW / 2);
-    }
+    if (!video || playing()) return;
+    const x = xOfTime(video.currentTime);
+    if (x < 40 || x > viewWidth() - 40) steerView(video.currentTime);
+    else scheduleRulerRedraw();
 }
 
 function scrollBlockIntoView(id, center = false) {
     const ev = events.find(x => x.id === id);
-    if (!ev || !timelineScroll) return;
-    const start = tcToSecs(ev.startTime) * pxPerSecond;
-    const end   = tcToSecs(ev.endTime) * pxPerSecond;
-    const viewW = timelineScroll.clientWidth;
-    const left  = timelineScroll.scrollLeft;
-    if (center) {
-        timelineScroll.scrollLeft = Math.max(0, (start + end) / 2 - viewW / 2);
-    } else if (start < left || end > left + viewW) {
-        timelineScroll.scrollLeft = Math.max(0, start - viewW / 3);
-    }
+    if (!ev || playing() || !viewWidth()) return;
+    const start = tcToSecs(ev.startTime), end = tcToSecs(ev.endTime);
+    const x0 = xOfTime(start), x1 = xOfTime(end);
+    if (center || x0 < 20 || x1 > viewWidth() - 20) steerView((start + end) / 2);
+    else scheduleRulerRedraw();
 }
 
-// The canvas only ever renders the currently-scrolled-into-view time window
-// (viewport-sized, "sticky" to the left of the scroll container) instead of
-// the whole video duration — a 2-hour movie at a readable zoom would need a
-// canvas millions of pixels wide, past what browsers allow. The much wider
-// timelineInner div (and the cue blocks inside it) still spans the whole
-// duration since plain positioned divs don't have that limit, so scrolling
-// still works over the full track.
+// ── Drawing ─────────────────────────────────────────
+// Kept for callers that ask how the strip is divided. The cue boxes now sit
+// on the waveform itself, so the audio lane and the block lane are the same.
 function laneMetrics(H) {
-    const strip = showSpeech ? SPEECH_STRIP_H : 0;
-    const top = RULER_H + strip;
-    // The block lane takes about a third of what is left, bounded so it stays
-    // legible on a tall strip and does not swallow a short one.
-    const blocks = Math.round(Math.min(58, Math.max(24, (H - top) * 0.32)));
-    const waveH = Math.max(16, H - top - blocks);
-    return { strip, top, blocks, waveH, mid: top + waveH / 2, bottom: top + waveH };
+    const top = RULER_H;
+    const waveH = Math.max(16, H - top);
+    return { strip: 0, top, blocks: waveH, waveH, mid: top + waveH / 2, bottom: top + waveH };
 }
 
-// The canvas only ever renders the currently-scrolled-into-view time window
-// (viewport-sized, "sticky" to the left of the scroll container) instead of
-// the whole video duration — a 2-hour movie at a readable zoom would need a
-// canvas millions of pixels wide, past what browsers allow. The much wider
-// timelineInner div (and the cue blocks inside it) still spans the whole
-// duration since plain positioned divs don't have that limit, so scrolling
-// still works over the full track.
+/* Repaints the strip: waveform, shot changes, timing warnings, the ruler,
+   and the overview bar, then lines the block layer and the playhead up with
+   the new view. Reads only what is visible, so it runs every frame during
+   playback. */
 function drawTimelineRuler() {
-    if (!canvas || !timelineSpan()) return;
-    const innerW = Math.max(timelineSpan() * pxPerSecond, timelineScroll.clientWidth);
-    timelineInner.style.width = innerW + 'px';
+    if (!canvas || !timelineScroll) return;
+    const W = viewWidth(), H = viewHeight();
+    if (!W || !H) return;
+    clampView();
 
-    // The drawn strip matches the scroll container's content box exactly, so
-    // the canvas covers the visible window and no more. Backing it with the
-    // device pixel ratio keeps the waveform and the timecodes crisp on the
-    // high-DPI screens most of this work happens on.
-    const W = timelineScroll.clientWidth || innerW;
-    const H = timelineScroll.clientHeight || timelineWrap.offsetHeight;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
-        canvas.width  = Math.round(W * dpr);
-        canvas.height = Math.round(H * dpr);
-    }
-    canvas.style.width  = W + 'px';
+    const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    const bw = Math.round(W * dpr), bh = Math.round(H * dpr);
+    if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
+    canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
 
-    const lanes = laneMetrics(H);
-    // Publish the lane height so the block elements, which are plain DOM and
-    // sized by CSS, cannot drift out of step with what the canvas drew.
-    timelineEvents?.style.setProperty('--tm-blocks-h', lanes.blocks + 'px');
-
-    const originSecs = timelineScroll.scrollLeft / pxPerSecond;
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, '#141417');
-    grad.addColorStop(1, '#0a0a0c');
-    ctx.fillStyle = grad;
+    ctx.fillStyle = '#0d0e11';
     ctx.fillRect(0, 0, W, H);
 
-    // The block lane reads as a shelf under the audio rather than a second
-    // thing floating in the same space.
-    ctx.fillStyle = 'rgba(255,255,255,0.035)';
-    ctx.fillRect(0, H - lanes.blocks, W, lanes.blocks);
-    ctx.fillStyle = 'rgba(255,255,255,0.10)';
-    ctx.fillRect(0, H - lanes.blocks, W, 1);
+    const lanes = laneMetrics(H);
+    const t0 = viewStartSecs();
+    if (timelineSpan()) {
+        drawOutOfTrack(ctx, W, H, t0, lanes);
+        drawWaveform(ctx, W, H, t0, lanes);
+        drawTimingWarnings(ctx, W, t0, lanes);
+        drawTimecodeRuler(ctx, W, H, t0);
+        drawLoopBand(ctx, W, t0);
+    } else {
+        drawTimecodeRuler(ctx, W, H, t0);
+    }
 
-    drawTimecodeRuler(ctx, W, H, originSecs);
-    drawWaveform(ctx, W, H, originSecs, lanes);
-    drawLoopBand(ctx, W, H, originSecs, lanes);
+    // Shot changes, the cue being drawn and the snap guide go on a second
+    // canvas above the subtitle boxes: under them, a cut inside a box was a
+    // faint line behind a tinted panel, which is exactly where it matters.
+    const over = document.getElementById('timelineOverlay');
+    if (over?.getContext) {
+        if (over.width !== bw || over.height !== bh) { over.width = bw; over.height = bh; }
+        over.style.width = W + 'px';
+        over.style.height = H + 'px';
+        const octx = over.getContext('2d');
+        octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        octx.clearRect(0, 0, W, H);
+        if (timelineSpan()) {
+            drawShotChanges(octx, W, t0, lanes);
+            drawDraftCue(octx, t0, lanes);
+            drawSnapGuide(octx, t0, lanes);
+        }
+    }
+    positionTimelineLayers();
+    drawOverview();
+    paintTimecode();
+}
+
+// Before 0 and past the end of the track there is nothing to edit; shading
+// it says so instead of leaving an ambiguous blank.
+function drawOutOfTrack(ctx, W, H, t0, lanes) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    const xStart = xOfTime(0);
+    if (xStart > 0) ctx.fillRect(0, lanes.top, Math.min(W, xStart), lanes.waveH);
+    const xEnd = xOfTime(timelineSpan());
+    if (xEnd < W) ctx.fillRect(Math.max(0, xEnd), lanes.top, W - Math.max(0, xEnd), lanes.waveH);
 }
 
 // Picks a "nice" tick spacing (seconds) so labeled ticks land at least
@@ -1040,256 +1214,414 @@ function pickTickInterval(minPx) {
 }
 
 function drawTimecodeRuler(ctx, W, H, originSecs) {
-    // Ticks cover the whole timeline, not just the loaded video: cues timed
-    // past its end (or with no video at all) still need a readable ruler.
-    const dur = timelineSpan();
-    if (!dur) return;
-    const interval = pickTickInterval(80);
-
-    // Ruler background
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillStyle = '#16171c';
     ctx.fillRect(0, 0, W, RULER_H);
+    const dur = timelineSpan();
+    if (dur) {
+        const interval = pickTickInterval(96);
+        const minor = interval / 5;
+        const tEnd = originSecs + W / pxPerSecond;
 
-    // Minor ticks between the labelled ones give the eye something to
-    // measure against without crowding the numbers.
-    const minor = interval / 5;
-    if (minor * pxPerSecond >= 7) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        const firstMinor = Math.max(0, Math.floor(originSecs / minor));
-        const lastMinor = Math.min(Math.ceil((originSecs + W / pxPerSecond) / minor), firstMinor + Math.ceil(W / 7) + 4);
-        for (let n = firstMinor; n <= lastMinor; n++) {
-            const t = n * minor;
-            if (t > dur) break;
-            const x = Math.round((t - originSecs) * pxPerSecond) + 0.5;
-            ctx.moveTo(x, RULER_H - 5);
-            ctx.lineTo(x, RULER_H);
+        if (minor * pxPerSecond >= 6) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            const first = Math.max(0, Math.floor(originSecs / minor));
+            const last = Math.min(Math.ceil(tEnd / minor), first + Math.ceil(W / 6) + 4);
+            for (let n = first; n <= last; n++) {
+                const t = n * minor;
+                if (t > dur) break;
+                const x = Math.round((t - originSecs) * pxPerSecond) + 0.5;
+                ctx.moveTo(x, RULER_H - 5);
+                ctx.lineTo(x, RULER_H);
+            }
+            ctx.stroke();
         }
-        ctx.stroke();
-    }
 
-    const firstN = Math.max(0, Math.floor(originSecs / interval) - 1);
-    if (!Number.isFinite(firstN) || !Number.isFinite(interval) || interval <= 0) return;
-    // Bounded: at one tick per minPx across the canvas there can only be so
-    // many, and an unbounded loop here would freeze the page outright.
-    const maxTicks = Math.ceil(W / 8) + 4;
-    for (let n = firstN, drawn = 0; drawn < maxTicks; n++, drawn++) {
-        const t = n * interval;
-        if (t > dur) break;
-        const x = (t - originSecs) * pxPerSecond;
-        if (x > W + 2) break;
-        if (x < -2) continue;
+        // Frame ticks once a frame is wide enough to aim at.
+        if (pxPerSecond / fps >= 6) {
+            const frameLen = 1 / fps;
+            ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+            ctx.beginPath();
+            const f0 = Math.max(0, Math.floor(originSecs / frameLen));
+            const f1 = Math.min(Math.ceil(tEnd / frameLen), f0 + Math.ceil(W / 6) + 4);
+            for (let f = f0; f <= f1; f++) {
+                const t = f * frameLen;
+                if (t > dur) break;
+                const x = Math.round((t - originSecs) * pxPerSecond) + 0.5;
+                ctx.moveTo(x, RULER_H - 3);
+                ctx.lineTo(x, RULER_H);
+            }
+            ctx.stroke();
+        }
 
-        ctx.beginPath();
-        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-        ctx.lineWidth = 1;
-        ctx.moveTo(Math.round(x) + 0.5, 0);
-        ctx.lineTo(Math.round(x) + 0.5, RULER_H);
-        ctx.stroke();
-
-        const { hms, f } = secsToHMSF(t);
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.font = 'bold 10px "Courier New"';
+        const firstN = Math.max(0, Math.floor(originSecs / interval));
+        const maxTicks = Math.ceil(W / 8) + 4;
+        ctx.font = '600 10px "Courier New", monospace';
         ctx.textAlign = 'left';
-        ctx.fillText(`${hms}:${f}`, x + 3, 13);
-    }
-
-    // Frame ticks, once zoomed in enough for them to be legible
-    if (pxPerSecond / fps >= 6) {
-        const frameLen = 1 / fps;
-        const startFrame = Math.max(0, Math.floor(originSecs / frameLen) - 1);
-        const endFrame = Math.ceil((originSecs + W / pxPerSecond) / frameLen) + 1;
-        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let f = startFrame; f <= endFrame; f++) {
-            if (f % Math.round(fps) === 0) continue; // whole seconds already drawn above
-            const t = f * frameLen;
+        ctx.textBaseline = 'alphabetic';
+        for (let n = firstN, drawn = 0; drawn < maxTicks; n++, drawn++) {
+            const t = n * interval;
             if (t > dur) break;
             const x = Math.round((t - originSecs) * pxPerSecond) + 0.5;
-            ctx.moveTo(x, RULER_H - 6);
+            if (x > W + 2) break;
+            ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+            ctx.beginPath();
+            ctx.moveTo(x, 4);
             ctx.lineTo(x, RULER_H);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(255,255,255,0.8)';
+            ctx.fillText(tcLabel(t), x + 4, 13);
         }
-        ctx.stroke();
     }
-
-    // Bottom border on ruler
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth   = 1;
-    ctx.moveTo(0, RULER_H + 0.5);
-    ctx.lineTo(W, RULER_H + 0.5);
-    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    ctx.fillRect(0, RULER_H - 1, W, 1);
 }
 
-/* Draws the audio. Reading from the peak pyramid means one pass over the
-   visible pixels rather than over the samples behind them, so this costs the
-   same on a thirty-second clip and on a three-hour feature. */
+/* The waveform. Peaks as a soft envelope, loudness (RMS) as a solid core
+   inside it: the envelope shows where there is any sound at all, the core
+   where it is loud enough to be speech. The whole thing is scaled to the
+   track's own loudness, so a quiet dialogue stem fills the lane instead of
+   lying flat along the centre line. */
 function drawWaveform(ctx, W, H, originSecs, lanes) {
     if (peaksStatus !== 'ready' || !peaks) {
         drawWaveformPlaceholder(ctx, W, H, lanes);
         return;
     }
-
     const cols = TmWaveform.columnsFor(peaks, originSecs, pxPerSecond, Math.ceil(W));
-    const amp = (lanes.waveH / 2 - 2) * waveGain;
     const mid = lanes.mid;
-    const playX = (video ? video.currentTime - originSecs : -1) * pxPerSecond;
+    const half = lanes.waveH / 2 - 3;
+    const scale = waveScaler();
+    const amp = half * waveGain;
+    const top = lanes.top + 1, bottom = lanes.bottom - 1;
+    const y = v => Math.max(top, Math.min(bottom, mid - scale(v) * amp));
 
-    if (showSpeech) drawSpeechStrip(ctx, W, originSecs, lanes);
-
-    // A cue's own span is tinted behind the wave, so you can see at a glance
-    // whether its edges actually bracket the dialogue.
-    drawSelectionBand(ctx, W, originSecs, lanes);
-
-    const clampY = y => Math.max(lanes.top + 1, Math.min(lanes.bottom - 1, y));
-    const played = 'rgba(255,255,255,0.92)';
-    const ahead = 'rgba(255,212,0,0.88)';
-    const bodyPlayed = 'rgba(255,255,255,0.45)';
-    const bodyAhead = 'rgba(255,170,0,0.45)';
-
-    if (waveView === 'bars') {
-        // Deliberately gappy: at close zoom the gaps make individual
-        // syllables countable, which is what in-point work needs.
-        for (let x = 0; x < W; x += 2) {
-            const h = Math.min(lanes.waveH / 2 - 2, Math.max(cols.rms[x] * amp * 1.6, 0.5));
-            ctx.fillStyle = x < playX ? played : ahead;
-            ctx.fillRect(x, mid - h, 1.4, h * 2);
-        }
-    } else {
-        // Peaks first as a filled envelope, then the RMS body inside it: the
-        // envelope shows where sound exists at all, the body where it is
-        // loud enough to be speech.
-        if (waveView !== 'rms') {
-            for (const ahead_ of [false, true]) {
-                const from = ahead_ ? Math.max(0, Math.ceil(playX)) : 0;
-                const to = ahead_ ? W : Math.min(W, Math.max(0, Math.ceil(playX)));
-                if (to <= from) continue;
-                ctx.fillStyle = ahead_ ? ahead : played;
-                ctx.beginPath();
-                ctx.moveTo(from, clampY(mid - cols.max[from] * amp));
-                for (let x = from + 1; x < to; x++) ctx.lineTo(x, clampY(mid - cols.max[x] * amp));
-                for (let x = to - 1; x >= from; x--) ctx.lineTo(x, clampY(mid - cols.min[x] * amp));
-                ctx.closePath();
-                ctx.fill();
-            }
-        }
-        if (waveView !== 'peak') {
-            for (const ahead_ of [false, true]) {
-                const from = ahead_ ? Math.max(0, Math.ceil(playX)) : 0;
-                const to = ahead_ ? W : Math.min(W, Math.max(0, Math.ceil(playX)));
-                if (to <= from) continue;
-                ctx.fillStyle = waveView === 'rms' ? (ahead_ ? ahead : played) : (ahead_ ? bodyAhead : bodyPlayed);
-                ctx.beginPath();
-                ctx.moveTo(from, clampY(mid - cols.rms[from] * amp * 1.5));
-                for (let x = from + 1; x < to; x++) ctx.lineTo(x, clampY(mid - cols.rms[x] * amp * 1.5));
-                for (let x = to - 1; x >= from; x--) ctx.lineTo(x, clampY(mid + cols.rms[x] * amp * 1.5));
-                ctx.closePath();
-                ctx.fill();
-            }
-        }
-    }
-
-    // Centre axis, plus a flat line wherever the analysis has no data (past
-    // the end of the audio, typically) so the lane never looks merely blank.
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 6]);
-    ctx.moveTo(0, mid + 0.5);
-    ctx.lineTo(W, mid + 0.5);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    // The playhead itself is the separate #timelineCursor div (always
-    // pixel-accurate via normal scrolling); no need to draw it here too.
-}
-
-/* The thin band under the ruler marking where the analysis heard dialogue.
-   It is the cheapest possible answer to "is there anything to subtitle
-   here?" while scanning a long stretch at low zoom. */
-function drawSpeechStrip(ctx, W, originSecs, lanes) {
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(0, RULER_H + 1, W, SPEECH_STRIP_H - 1);
-    ctx.fillStyle = 'rgba(80,220,255,0.75)';
-    for (const r of peaks.speech) {
-        const x0 = (r.start - originSecs) * pxPerSecond;
-        const x1 = (r.end - originSecs) * pxPerSecond;
-        if (x1 < 0) continue;
-        if (x0 > W) break;
-        ctx.fillRect(Math.max(0, x0), RULER_H + 1, Math.max(1, Math.min(W, x1) - Math.max(0, x0)), SPEECH_STRIP_H - 1);
-    }
-    // And a very faint wash behind the wave itself, at zoom levels where a
-    // 5px strip is too coarse to line an edit up against.
-    if (pxPerSecond > 40) {
-        ctx.fillStyle = 'rgba(80,220,255,0.06)';
+    if (showSpeech && peaks.speech) {
+        ctx.fillStyle = 'rgba(80,220,255,0.07)';
         for (const r of peaks.speech) {
-            const x0 = (r.start - originSecs) * pxPerSecond;
-            const x1 = (r.end - originSecs) * pxPerSecond;
+            const x0 = (r.start - originSecs) * pxPerSecond, x1 = (r.end - originSecs) * pxPerSecond;
             if (x1 < 0) continue;
             if (x0 > W) break;
             ctx.fillRect(Math.max(0, x0), lanes.top, Math.min(W, x1) - Math.max(0, x0), lanes.waveH);
         }
     }
+
+    // Centre line first, so silence still reads as a line rather than a gap.
+    ctx.fillStyle = 'rgba(120,200,255,0.25)';
+    ctx.fillRect(0, Math.round(mid), W, 1);
+
+    const n = Math.min(W, cols.max.length);
+    if (waveView === 'bars') {
+        ctx.fillStyle = 'rgba(130,215,255,0.9)';
+        for (let x = 0; x < n; x += 3) {
+            const h = Math.min(half, Math.max(scale(cols.rms[x]) * amp, 0.5));
+            ctx.fillRect(x, mid - h, 2, h * 2);
+        }
+        return;
+    }
+    if (waveView !== 'rms') {
+        ctx.fillStyle = waveView === 'peak' ? 'rgba(130,215,255,0.9)' : 'rgba(60,150,230,0.8)';
+        ctx.beginPath();
+        ctx.moveTo(0, y(cols.max[0]));
+        for (let x = 1; x < n; x++) ctx.lineTo(x, y(cols.max[x]));
+        for (let x = n - 1; x >= 0; x--) ctx.lineTo(x, y(cols.min[x]));
+        ctx.closePath();
+        ctx.fill();
+    }
+    if (waveView !== 'peak') {
+        ctx.fillStyle = 'rgba(175,228,255,0.85)';
+        ctx.beginPath();
+        ctx.moveTo(0, y(cols.rms[0]));
+        for (let x = 1; x < n; x++) ctx.lineTo(x, y(cols.rms[x]));
+        for (let x = n - 1; x >= 0; x--) ctx.lineTo(x, y(-cols.rms[x]));
+        ctx.closePath();
+        ctx.fill();
+    }
 }
 
-function drawSelectionBand(ctx, W, originSecs, lanes) {
-    const ev = events.find(x => x.id === activeId);
-    if (!ev) return;
-    const x0 = (tcToSecs(ev.startTime) - originSecs) * pxPerSecond;
-    const x1 = (tcToSecs(ev.endTime) - originSecs) * pxPerSecond;
-    if (x1 < 0 || x0 > W) return;
-    ctx.fillStyle = 'rgba(226,0,26,0.14)';
-    ctx.fillRect(x0, lanes.top, x1 - x0, lanes.waveH);
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 1;
+/* Maps a sample value (-1..1) to a height (-1..1) for the lane.
+
+   Decibels are the default because a film mix spans a huge range: on a
+   linear scale the music sets the size and the dialogue — the part being
+   subtitled — is a thin line along the middle. On a 45 dB scale referred to
+   the track's own loud level, speech twenty decibels down still fills more
+   than half the lane, and nothing loud can blow the lane out. */
+const WAVE_DB_RANGE = 45;
+function waveScaler() {
+    const ref = peaks?.reference || 1;
+    if (waveScale === 'linear') {
+        const norm = Math.min(40, 0.9 / ref);
+        return v => v * norm;
+    }
+    return v => {
+        const a = v < 0 ? -v : v;
+        if (a < 1e-5) return 0;
+        const d = 1 + 20 * Math.log10(a / ref) / WAVE_DB_RANGE;
+        const h = d <= 0 ? 0 : d > 1.05 ? 1.05 : d;
+        return v < 0 ? -h : h;
+    };
+}
+
+/* What the audio lane says before (or instead of) a waveform. */
+function drawWaveformPlaceholder(ctx, W, H, lanes) {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(0, Math.round(lanes.mid), W, 1);
+    const msg = peaksStatus === 'working' ? ''
+        : peaksStatus === 'failed' ? (peaksMessage || 'Audio could not be analysed')
+        : video?.currentSrc || video?.src ? 'Reading the audio…'
+        : 'No video in this project — the ruler and subtitle boxes still work';
+    if (!msg) return;
+    ctx.fillStyle = 'rgba(154,154,165,0.85)';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(msg, W / 2, lanes.top + 16);
+    ctx.textAlign = 'left';
+}
+
+function drawShotChanges(ctx, W, originSecs, lanes) {
+    if (!shotCuts.length) return;
+    const tEnd = originSecs + W / pxPerSecond;
+    ctx.fillStyle = 'rgba(196,150,255,0.9)';
+    for (const c of shotCuts) {
+        if (c < originSecs - 0.1) continue;
+        if (c > tEnd + 0.1) break;
+        const x = Math.round((c - originSecs) * pxPerSecond);
+        ctx.fillRect(x, lanes.top, 1, lanes.waveH);
+        // A diamond on the ruler, so a cut stays findable when a box covers
+        // the line below.
+        ctx.beginPath();
+        ctx.moveTo(x + 0.5, RULER_H - 9);
+        ctx.lineTo(x + 4.5, RULER_H - 5);
+        ctx.lineTo(x + 0.5, RULER_H - 1);
+        ctx.lineTo(x - 3.5, RULER_H - 5);
+        ctx.closePath();
+        ctx.fill();
+    }
+}
+
+/* Problems with the spacing of cues, drawn where they are: a short gap as a
+   red bar between the two cues, an overlap as a hatched band, an edge that
+   just misses a shot change as an amber tick joined to the cut. */
+function drawTimingWarnings(ctx, W, originSecs, lanes) {
+    const tEnd = originSecs + W / pxPerSecond;
+    const minGap = deliveryProfile?.minGapSeconds ?? 0.08;
+    for (let i = 0; i < events.length; i++) {
+        const ev = events[i];
+        const start = tcToSecs(ev.startTime), end = tcToSecs(ev.endTime);
+        if (end < originSecs - 2) continue;
+        if (start > tEnd + 2) break;
+
+        const next = events[i + 1];
+        if (next) {
+            const ns = tcToSecs(next.startTime);
+            const gap = ns - end;
+            if (gap < 0) {
+                const x0 = (ns - originSecs) * pxPerSecond, x1 = (end - originSecs) * pxPerSecond;
+                ctx.fillStyle = 'rgba(255,51,85,0.55)';
+                ctx.fillRect(x0, lanes.bottom - 7, Math.max(2, x1 - x0), 6);
+                warningTick(ctx, (x0 + x1) / 2, 'rgba(255,51,85,1)');
+            } else if (gap > 0 && gap < minGap) {
+                const x0 = (end - originSecs) * pxPerSecond, x1 = (ns - originSecs) * pxPerSecond;
+                ctx.fillStyle = 'rgba(255,51,85,0.75)';
+                ctx.fillRect(x0, lanes.top + BLOCK_PAD_Y, Math.max(2, x1 - x0), lanes.waveH - BLOCK_PAD_Y * 2);
+                warningTick(ctx, (x0 + x1) / 2, 'rgba(255,51,85,1)');
+            }
+        }
+
+        for (const note of shotNotes(ev)) {
+            const xe = (note.edge - originSecs) * pxPerSecond;
+            const xc = (note.cut - originSecs) * pxPerSecond;
+            ctx.strokeStyle = 'rgba(255,179,0,0.95)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(xe, RULER_H + 2);
+            ctx.lineTo(xc, RULER_H + 2);
+            ctx.stroke();
+            ctx.lineWidth = 1;
+            warningTick(ctx, xe, 'rgba(255,179,0,1)');
+        }
+    }
+}
+
+function warningTick(ctx, x, colour) {
+    ctx.fillStyle = colour;
     ctx.beginPath();
-    ctx.moveTo(Math.round(x0) + 0.5, lanes.top);
-    ctx.lineTo(Math.round(x0) + 0.5, lanes.bottom);
-    ctx.moveTo(Math.round(x1) + 0.5, lanes.top);
-    ctx.lineTo(Math.round(x1) + 0.5, lanes.bottom);
-    ctx.stroke();
+    ctx.moveTo(x - 4, RULER_H - 8);
+    ctx.lineTo(x + 4, RULER_H - 8);
+    ctx.lineTo(x, RULER_H - 1);
+    ctx.closePath();
+    ctx.fill();
 }
 
-function drawLoopBand(ctx, W, H, originSecs, lanes) {
+/* Shot-change advice for one cue: each edge that lands within a few frames
+   of a cut without being on the right spot. In-times belong on the cut;
+   out-times a couple of frames before it. */
+function shotNotes(ev) {
+    if (!shotCuts.length || typeof TmShots === 'undefined') return [];
+    const frame = 1 / fps;
+    const reach = SHOT_WINDOW_FRAMES * frame;
+    const notes = [];
+    const start = tcToSecs(ev.startTime), end = tcToSecs(ev.endTime);
+
+    const cIn = TmShots.nearest(shotCuts, start);
+    if (cIn != null && Math.abs(start - cIn) <= reach && Math.abs(start - cIn) > frame / 2) {
+        const frames = Math.round((start - cIn) / frame);
+        notes.push({ edge: start, cut: cIn, text: `In-time is ${Math.abs(frames)} frame${Math.abs(frames) === 1 ? '' : 's'} ${frames > 0 ? 'after' : 'before'} a shot change` });
+    }
+    const cOut = TmShots.nearest(shotCuts, end);
+    if (cOut != null && Math.abs(end - cOut) <= reach) {
+        const ideal = cOut - OUT_BEFORE_CUT_FRAMES * frame;
+        if (Math.abs(end - ideal) > frame / 2) {
+            const frames = Math.round((end - cOut) / frame);
+            notes.push({ edge: end, cut: cOut, text: `Out-time is ${frames === 0 ? 'on' : Math.abs(frames) + ' frame' + (Math.abs(frames) === 1 ? '' : 's') + (frames > 0 ? ' after' : ' before')} a shot change (aim for ${OUT_BEFORE_CUT_FRAMES} frames before)` });
+        }
+    }
+    return notes;
+}
+
+function drawDraftCue(ctx, originSecs, lanes) {
+    if (!drawDraft) return;
+    const x0 = (drawDraft.start - originSecs) * pxPerSecond;
+    const x1 = (drawDraft.end - originSecs) * pxPerSecond;
+    ctx.fillStyle = 'rgba(226,0,26,0.22)';
+    ctx.fillRect(x0, lanes.top + BLOCK_PAD_Y, x1 - x0, lanes.waveH - BLOCK_PAD_Y * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(x0 + 0.5, lanes.top + BLOCK_PAD_Y + 0.5, Math.max(1, x1 - x0 - 1), lanes.waveH - BLOCK_PAD_Y * 2 - 1);
+    ctx.setLineDash([]);
+}
+
+function drawLoopBand(ctx, W, originSecs) {
     if (!loopRange) return;
     const x0 = (loopRange.start - originSecs) * pxPerSecond;
     const x1 = (loopRange.end - originSecs) * pxPerSecond;
     if (x1 < 0 || x0 > W) return;
-    ctx.fillStyle = 'rgba(80,220,255,0.10)';
+    ctx.fillStyle = 'rgba(80,220,255,0.18)';
     ctx.fillRect(x0, 0, x1 - x0, RULER_H);
-    ctx.fillStyle = 'rgba(80,220,255,0.9)';
-    ctx.fillRect(Math.max(0, x0), 0, 2, RULER_H);
-    ctx.fillRect(Math.min(W - 2, x1 - 2), 0, 2, RULER_H);
+    ctx.fillStyle = 'rgba(80,220,255,0.95)';
+    ctx.fillRect(x0, 0, 2, RULER_H);
+    ctx.fillRect(x1 - 2, 0, 2, RULER_H);
 }
 
-/* What the audio lane says before (or instead of) a waveform: a progress
-   note while the track is being read, and a plain reason when it cannot be. */
-function drawWaveformPlaceholder(ctx, W, H, lanes) {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+const SNAP_COLOURS = { cut: '#c496ff', speech: '#50dcff', cue: '#ffffff', gap: '#ff6680', playhead: '#e2001a', frame: '#9a9aa5' };
+function drawSnapGuide(ctx, originSecs, lanes) {
+    if (!snapGuide) return;
+    const x = Math.round((snapGuide.t - originSecs) * pxPerSecond) + 0.5;
+    ctx.strokeStyle = SNAP_COLOURS[snapGuide.kind] || '#fff';
     ctx.lineWidth = 1;
-    ctx.setLineDash([3, 6]);
+    ctx.setLineDash([3, 3]);
     ctx.beginPath();
-    ctx.moveTo(0, lanes.mid + 0.5);
-    ctx.lineTo(W, lanes.mid + 0.5);
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, lanes.bottom);
     ctx.stroke();
-    ctx.restore();
-
-    const msg = peaksStatus === 'working' ? ''
-        : peaksStatus === 'failed' ? (peaksMessage || 'Audio could not be analysed')
-        : video?.currentSrc || video?.src ? 'Reading the audio\u2026'
-        : 'No video in this project — the ruler and cue blocks still work';
-    if (!msg) return;
-    ctx.fillStyle = 'rgba(154,154,165,0.8)';
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(msg, W / 2, lanes.mid + 4);
+    ctx.setLineDash([]);
 }
 
-/* ══════════════════════════════════════════════════
-   AUDIO ANALYSIS
-   ══════════════════════════════════════════════════ */
+/* Keeps the DOM layers — cue blocks, playhead, hover line — in step with
+   the canvas after the view moves. */
+function positionTimelineLayers() {
+    ensureBlocksRendered();
+    if (timelineInner && renderedWindow) {
+        const dx = (renderedWindow.origin - viewStartSecs()) * pxPerSecond;
+        timelineInner.style.transform = `translate3d(${dx}px,0,0)`;
+    }
+    pinOffscreenLabels();
+    updateCursor();
+}
+
+/* A box that starts left of the view keeps its number and text at the left
+   edge of the strip, so a long subtitle the playhead is inside is never
+   reduced to the tail end of a sentence. */
+let pinnedBlock = null;
+function pinOffscreenLabels() {
+    if (!timelineEvents?.querySelectorAll) return;
+    const t0 = viewStartSecs();
+    let found = null, shift = 0;
+    for (let i = 0; i < events.length; i++) {
+        const s = tcToSecs(events[i].startTime);
+        if (s >= t0) break;
+        const e = tcToSecs(events[i].endTime);
+        if (e > t0) { found = events[i].id; shift = (t0 - s) * pxPerSecond; }
+    }
+    const block = found != null ? timelineEvents.querySelector(`.tm-timeline-block[data-id="${found}"]`) : null;
+    if (pinnedBlock && pinnedBlock !== block) pinnedBlock.style.removeProperty?.('--tm-pin');
+    if (block) {
+        // Stop pinning once only a sliver remains, so the label leaves with it.
+        block.style.setProperty?.('--tm-pin', Math.max(0, Math.min(shift, block.offsetWidth - 80)) + 'px');
+    }
+    pinnedBlock = block;
+}
+
+function updateCursor() {
+    if (!cursor) return;
+    if (!video || !Number.isFinite(video.duration)) { cursor.style.display = 'none'; return; }
+    const x = xOfTime(video.currentTime);
+    const W = viewWidth();
+    cursor.style.display = x < -4 || x > W + 4 ? 'none' : '';
+    cursor.style.transform = `translate3d(${x}px,0,0)`;
+}
+
+function paintTimecode() {
+    const el = document.getElementById('tlTimecode');
+    if (el && video) el.textContent = tcLabel(video.currentTime || 0);
+}
+
+// ── Overview bar ───────────────────────────────────
+/* A map of the whole film under the strip: where the cues are and how far
+   they have got, where the dialogue is, and which part the strip is showing.
+   Dragging it is the fast way across a feature-length track. */
+function drawOverview() {
+    const ov = document.getElementById('timelineOverview');
+    if (!ov || !ov.getContext) return;
+    const W = ov.clientWidth, H = ov.clientHeight;
+    if (!W || !H) return;
+    const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    if (ov.width !== Math.round(W * dpr) || ov.height !== Math.round(H * dpr)) {
+        ov.width = Math.round(W * dpr);
+        ov.height = Math.round(H * dpr);
+    }
+    const ctx = ov.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0a0a0c';
+    ctx.fillRect(0, 0, W, H);
+    const span = timelineSpan();
+    if (!span) return;
+    const sx = W / span;
+
+    if (peaksStatus === 'ready' && peaks) {
+        const cols = TmWaveform.columnsFor(peaks, 0, sx, Math.ceil(W));
+        const scale = waveScaler();
+        ctx.fillStyle = 'rgba(64,170,235,0.45)';
+        for (let x = 0; x < W; x++) {
+            const h = Math.min(H - 2, scale(cols.rms[x]) * (H - 2));
+            if (h > 0.3) ctx.fillRect(x, H - h, 1, h);
+        }
+    }
+    for (let i = 0; i < events.length; i++) {
+        const ev = events[i];
+        const x = tcToSecs(ev.startTime) * sx;
+        const w = Math.max(1, (tcToSecs(ev.endTime) - tcToSecs(ev.startTime)) * sx);
+        const issues = issuesAt(i);
+        ctx.fillStyle = issues.includes('Overlapping cues') || issues.includes('Invalid timing') ? '#ff3355'
+            : issues.some(s => s !== 'Untranslated') ? '#ffb300'
+            : ev.translatedText?.trim() ? '#29c76f' : '#6b6b75';
+        ctx.fillRect(x, 2, w, 5);
+    }
+    const v0 = Math.max(0, viewStartSecs()) * sx;
+    const v1 = Math.min(span, viewStartSecs() + viewWidth() / pxPerSecond) * sx;
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(v0, 0, Math.max(2, v1 - v0), H);
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.strokeRect(v0 + 0.5, 0.5, Math.max(2, v1 - v0) - 1, H - 1);
+    if (video && Number.isFinite(video.duration)) {
+        ctx.fillStyle = '#e2001a';
+        ctx.fillRect(Math.round(video.currentTime * sx), 0, 2, H);
+    }
+}
+
+// ══════════════════════════════════════════════════
+//  AUDIO & SHOT ANALYSIS
+// ══════════════════════════════════════════════════
 
 function setAnalysisProgress(stage, frac) {
     if (!tlProgress) return;
@@ -1297,9 +1629,7 @@ function setAnalysisProgress(stage, frac) {
     const label = stage === 'download' ? 'Reading the media'
         : stage === 'decode' ? 'Decoding audio'
         : 'Measuring the waveform';
-    tlProgressText.textContent = label + '\u2026';
-    // Downloading is the long part on a feature-length file, so it gets most
-    // of the bar rather than a third of it.
+    tlProgressText.textContent = label + '…';
     const overall = stage === 'download' ? frac * 0.7
         : stage === 'decode' ? 0.7 + frac * 0.15
         : 0.85 + frac * 0.15;
@@ -1308,19 +1638,28 @@ function setAnalysisProgress(stage, frac) {
 
 function describeAnalysis() {
     const info = document.getElementById('tlAudioInfo');
-    if (!info) return;
-    if (peaksStatus === 'ready') {
-        const speech = peaks.speech.reduce((n, r) => n + (r.end - r.start), 0);
-        const pct = peaks.duration ? Math.round(speech / peaks.duration * 100) : 0;
-        info.textContent = `${peaks.speech.length} dialogue regions over `
-            + `${Math.round(peaks.duration)}s (${pct}% of the track).`
-            + (peaks.fromCache ? ' Loaded from this browser\u2019s cache.' : '');
-    } else if (peaksStatus === 'working') {
-        info.textContent = 'Analysing\u2026';
-    } else if (peaksStatus === 'failed') {
-        info.textContent = peaksMessage || 'Analysis failed.';
-    } else {
-        info.textContent = 'No audio analysed yet.';
+    if (info) {
+        if (peaksStatus === 'ready') {
+            const speech = peaks.speech.reduce((n, r) => n + (r.end - r.start), 0);
+            const pct = peaks.duration ? Math.round(speech / peaks.duration * 100) : 0;
+            info.textContent = `Audio: ${peaks.speech.length} dialogue regions, ${pct}% of the track.`;
+        } else if (peaksStatus === 'working') info.textContent = 'Audio: analysing…';
+        else if (peaksStatus === 'failed') info.textContent = 'Audio: ' + (peaksMessage || 'analysis failed.');
+        else info.textContent = 'Audio: not analysed yet.';
+    }
+    const shots = document.getElementById('tlShotInfo');
+    if (shots) {
+        shots.textContent = shotsStatus === 'ready' ? `Shot changes: ${shotCuts.length} found.`
+            : shotsStatus === 'working' ? `Shot changes: scanning the video… ${Math.round(shotsProgress * 100)}%`
+            : shotsStatus === 'failed' ? 'Shot changes: ' + (shotsMessage || 'could not be detected.')
+            : 'Shot changes: waiting for the audio first.';
+    }
+    const status = document.getElementById('tlStatus');
+    if (status) {
+        status.textContent = peaksStatus === 'working' ? 'Reading audio…'
+            : shotsStatus === 'working' ? `Finding shot changes ${Math.round(shotsProgress * 100)}%`
+            : '';
+        status.hidden = !status.textContent;
     }
 }
 
@@ -1331,7 +1670,7 @@ function waveformCacheKey() {
 
 let analysisRun = 0;
 async function loadWaveform({ force = false } = {}) {
-    if (!video || !(video.currentSrc || video.src)) return;
+    if (!video || !(video.currentSrc || video.src) || typeof TmWaveform === 'undefined') return;
     if (peaksStatus === 'working') return;
     const run = ++analysisRun;
     const key = waveformCacheKey();
@@ -1342,13 +1681,12 @@ async function loadWaveform({ force = false } = {}) {
     describeAnalysis();
     setAnalysisProgress('download', 0);
     drawTimelineRuler();
-
     try {
         const result = await TmWaveform.analyse(video.currentSrc || video.src, {
             cacheKey: key,
             onProgress: (stage, frac) => { if (run === analysisRun) setAnalysisProgress(stage, frac); },
         });
-        if (run !== analysisRun) return;   // a re-analysis overtook this one
+        if (run !== analysisRun) return;
         peaks = result;
         peaksStatus = 'ready';
     } catch (err) {
@@ -1361,171 +1699,490 @@ async function loadWaveform({ force = false } = {}) {
     }
     describeAnalysis();
     drawTimelineRuler();
+    // Shot detection plays a second copy of the video; starting it only now
+    // keeps the two from fighting over the same download.
+    if (shotsStatus === 'idle') loadShotChanges();
 }
 
-/* ══════════════════════════════════════════════════
-   TIMELINE SURFACE: scrub, hover, wheel-zoom
-   ══════════════════════════════════════════════════ */
+let shotsRun = 0;
+async function loadShotChanges({ force = false } = {}) {
+    if (!video || !(video.currentSrc || video.src) || typeof TmShots === 'undefined') return;
+    if (shotsStatus === 'working') return;
+    const run = ++shotsRun;
+    const key = waveformCacheKey();
+    if (force && key) await TmShots.forget(key);
+    shotsStatus = 'working';
+    shotsProgress = 0;
+    describeAnalysis();
+    try {
+        const result = await TmShots.detect(video.currentSrc || video.src, {
+            cacheKey: key,
+            fps,
+            isCancelled: () => run !== shotsRun,
+            onProgress: frac => {
+                if (run !== shotsRun) return;
+                shotsProgress = frac;
+                describeAnalysis();
+            },
+        });
+        if (run !== shotsRun) return;
+        shotCuts = result.cuts;
+        shotsStatus = 'ready';
+    } catch (err) {
+        if (run !== shotsRun) return;
+        shotCuts = [];
+        shotsStatus = 'failed';
+        shotsMessage = (err && err.message) || 'could not be detected';
+    }
+    describeAnalysis();
+    renderTimelineBlocks();   // block tooltips mention shot-change advice
+    drawTimelineRuler();
+}
+
+// ══════════════════════════════════════════════════
+//  TIMELINE INTERACTION
+// ══════════════════════════════════════════════════
 
 function timeAtClientX(clientX) {
     const rect = timelineScroll.getBoundingClientRect();
-    const t = (timelineScroll.scrollLeft + clientX - rect.left) / pxPerSecond;
-    return Math.max(0, Math.min(t, timelineSpan() || t));
+    return viewStartSecs() + (clientX - rect.left) / pxPerSecond;
 }
 
-function showReadout(html) {
-    if (!timelineReadout) return;
-    timelineReadout.innerHTML = html;
-    timelineReadout.hidden = false;
+function clampToTrack(t) {
+    const span = timelineSpan();
+    return Math.max(0, span ? Math.min(t, span) : t);
 }
-function hideReadout() { if (timelineReadout) timelineReadout.hidden = true; }
 
 function tcLabel(secs) {
     const { hms, f } = secsToHMSF(secs);
     return `${hms}:${f}`;
 }
 
+/* The readout floats beside the pointer, or beside the edge being dragged,
+   so the number is where the eye already is. */
+function showReadout(html, x) {
+    if (!timelineReadout) return;
+    timelineReadout.innerHTML = html;
+    timelineReadout.hidden = false;
+    if (x != null) {
+        const W = viewWidth();
+        const left = Math.max(4, Math.min(W - 4, x));
+        timelineReadout.style.left = left + 'px';
+        timelineReadout.style.transform = left > W - 160 ? 'translateX(calc(-100% - 8px))' : 'translateX(8px)';
+    }
+}
+function hideReadout() { if (timelineReadout) timelineReadout.hidden = true; }
+
 function seekTo(secs) {
     if (!video || !Number.isFinite(video.duration)) return;
     video.currentTime = Math.max(0, Math.min(secs, video.duration));
 }
 
-function wireTimelineSurface() {
-    if (!timelineScroll) return;
+/* A seek that came from the strip itself: the view stays where it is (the
+   user was looking at that spot) instead of re-centring. */
+function seekFromTimeline(secs) {
+    if (!video) return;
+    timelineSeek = !playing();
+    seekTo(secs);
+    scheduleRulerRedraw();
+}
 
-    // Anything inside a cue block is that block's gesture (select, move,
-    // resize); everywhere else on the strip scrubs.
-    const onBlock = e => !!e.target.closest?.('.tm-timeline-block');
+function canDrawCues() {
+    return loaded && (typeof CAN_EDIT_TRANSLATION === 'undefined' || CAN_EDIT_TRANSLATION);
+}
+
+/* The free stretch of track around `t` — between the cue ending before it
+   and the cue starting after it — so a drawn cue never lands on another. */
+function overlapsAllowed() {
+    return !!workspaceSettings?.rules?.allowOverlaps;
+}
+
+function freeGapAround(t) {
+    let lo = 0, hi = timelineSpan() || Infinity;
+    if (overlapsAllowed()) return { lo, hi };
+    for (const ev of events) {
+        const s = tcToSecs(ev.startTime), e = tcToSecs(ev.endTime);
+        if (e <= t && e > lo) lo = e;
+        if (s >= t && s < hi) hi = s;
+    }
+    return { lo, hi };
+}
+
+function createCueAt(start, end) {
+    if (!canDrawCues()) return;
+    const pos = events.findIndex(ev => tcToSecs(ev.startTime) > start);
+    const at = pos === -1 ? events.length : pos;
+    const ev = {
+        id: nextTempId--,
+        index: at + 1,
+        startTime: secsToSrtTc(start),
+        endTime: secsToSrtTc(end),
+        originalText: '',
+        translatedText: '',
+        originalLocked: false,
+    };
+    events.splice(at, 0, ev);
+    activeId = ev.id;
+    selectedIds = new Set([ev.id]);
+    markDirty();
+    renderEvents();
+    renderTimelineBlocks();
+    selectEvent(ev.id, { scrollBlock: 'center', focusTranslation: true });
+}
+
+function wireTimelineSurface() {
+    if (!timelineScroll || typeof timelineScroll.getBoundingClientRect !== 'function') return;
 
     timelineScroll.addEventListener('mousedown', e => {
-        if (e.button !== 0 || onBlock(e) || dragState) return;
+        const block = e.target.closest?.('.tm-timeline-block');
+        if (block) { onBlockMouseDown(e, block); return; }
+        const rect = timelineScroll.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+
+        // Middle button, or Alt with the left, grabs the strip to pan it.
+        if (e.button === 1 || (e.button === 0 && e.altKey)) {
+            e.preventDefault();
+            panState = { startX: e.clientX, startCentre: viewCentre };
+            stopGlide();
+            timelineWrap.classList.add('tm-tl-panning');
+            return;
+        }
+        if (e.button !== 0) return;
         e.preventDefault();
-        scrubbing = true;
-        wasPlayingBeforeScrub = video ? !video.paused : false;
-        // Scrubbing with the audio running is how you find a hard consonant
-        // to cut on; silent scrubbing is how you move without being deafened.
-        // The user picks, and the default is silence.
-        if (!scrubAudio && video && !video.paused) video.pause();
-        seekTo(timeAtClientX(e.clientX));
+
+        // The ruler scrubs: press and drag to move the playhead.
+        if (y < RULER_H || !canDrawCues()) {
+            rulerScrub = { wasPlaying: playing(), moved: false, startX: e.clientX };
+            if (!scrubAudio && playing()) video.pause();
+            if (y >= RULER_H) rulerScrub.lane = true;
+            seekFromTimeline(clampToTrack(timeAtClientX(e.clientX)));
+            return;
+        }
+
+        // Empty waveform: press and drag to draw a new subtitle; a plain
+        // click just moves the playhead there.
+        const t = clampToTrack(snapValue(timeAtClientX(e.clientX), [], 'in'));
+        const gap = freeGapAround(t);
+        drawDraft = { anchor: t, start: t, end: t, gap, startX: e.clientX };
         document.body.style.userSelect = 'none';
     });
 
     document.addEventListener('mousemove', e => {
-        if (!scrubbing) return;
-        seekTo(timeAtClientX(e.clientX));
-        showReadout(`<b>${tcLabel(video?.currentTime || 0)}</b>`);
-        scheduleRulerRedraw();
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (!scrubbing) return;
-        scrubbing = false;
-        document.body.style.userSelect = '';
-        hideReadout();
-        if (wasPlayingBeforeScrub && video?.paused) video.play();
-    });
-
-    // Hover guide + readout: line an edit up against the waveform before
-    // committing to it.
-    timelineScroll.addEventListener('mousemove', e => {
-        if (scrubbing || dragState) return;
-        hoverSecs = timeAtClientX(e.clientX);
-        timelineWrap.classList.add('tm-tl-hovering');
-        if (timelineHover) timelineHover.style.left = (hoverSecs * pxPerSecond) + 'px';
-        const region = peaks && TmWaveform.regionAt(peaks, hoverSecs);
-        showReadout(tcLabel(hoverSecs) + (region ? ' · dialogue' : ''));
-    });
-
-    timelineScroll.addEventListener('mouseleave', () => {
-        hoverSecs = null;
-        timelineWrap.classList.remove('tm-tl-hovering');
-        if (!scrubbing && !dragState) hideReadout();
-    });
-
-    // Ctrl/⌘ + wheel zooms about the pointer, which is how every other
-    // timeline behaves; a plain wheel scrolls the strip sideways, since the
-    // lane has nowhere to scroll vertically.
-    timelineScroll.addEventListener('wheel', e => {
-        if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            const anchor = timeAtClientX(e.clientX);
-            const before = (e.clientX - timelineScroll.getBoundingClientRect().left);
-            setZoom(pxPerSecond * (e.deltaY < 0 ? 1.25 : 1 / 1.25), anchor);
-            // setZoom centres on the anchor; put it back under the pointer.
-            timelineScroll.scrollLeft = Math.max(0, anchor * pxPerSecond - before);
+        if (panState) {
+            stopGlide();
+            viewCentre = panState.startCentre - (e.clientX - panState.startX) / pxPerSecond;
             scheduleRulerRedraw();
-        } else if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-            e.preventDefault();
-            timelineScroll.scrollLeft += e.deltaY;
+            return;
         }
+        if (rulerScrub) {
+            if (Math.abs(e.clientX - rulerScrub.startX) > 2) rulerScrub.moved = true;
+            const t = clampToTrack(timeAtClientX(e.clientX));
+            seekFromTimeline(t);
+            autoPanNearEdge(e.clientX);
+            showReadout(`<b>${tcLabel(t)}</b>`, e.clientX - timelineScroll.getBoundingClientRect().left);
+            return;
+        }
+        if (drawDraft) {
+            const raw = clampToTrack(timeAtClientX(e.clientX));
+            const edge = raw >= drawDraft.anchor ? 'out' : 'in';
+            const t = Math.max(drawDraft.gap.lo, Math.min(drawDraft.gap.hi, snapValue(raw, [], edge)));
+            drawDraft.start = Math.min(drawDraft.anchor, t);
+            drawDraft.end = Math.max(drawDraft.anchor, t);
+            autoPanNearEdge(e.clientX);
+            const dur = drawDraft.end - drawDraft.start;
+            showReadout(`<b>${tcLabel(drawDraft.start)}</b> → <b>${tcLabel(drawDraft.end)}</b> · ${dur.toFixed(2)}s`,
+                e.clientX - timelineScroll.getBoundingClientRect().left);
+            scheduleRulerRedraw();
+        }
+    });
+
+    document.addEventListener('mouseup', e => {
+        if (panState) {
+            panState = null;
+            timelineWrap.classList.remove('tm-tl-panning');
+            return;
+        }
+        if (rulerScrub) {
+            const { wasPlaying } = rulerScrub;
+            rulerScrub = null;
+            hideReadout();
+            if (wasPlaying && video?.paused) video.play();
+            return;
+        }
+        if (drawDraft) {
+            const { start, end, startX } = drawDraft;
+            drawDraft = null;
+            snapGuide = null;
+            document.body.style.userSelect = '';
+            hideReadout();
+            if (Math.abs(e.clientX - startX) < 4 || end - start < MIN_CUE_DUR) {
+                seekFromTimeline(clampToTrack(timeAtClientX(e.clientX)));
+            } else {
+                createCueAt(start, end);
+            }
+            scheduleRulerRedraw();
+        }
+    });
+
+    // Hover: a guide line and the timecode under the pointer.
+    timelineScroll.addEventListener('mousemove', e => {
+        if (rulerScrub || dragState || drawDraft || panState) return;
+        const x = e.clientX - timelineScroll.getBoundingClientRect().left;
+        const t = timeAtClientX(e.clientX);
+        timelineWrap.classList.add('tm-tl-hovering');
+        if (timelineHover) timelineHover.style.transform = `translate3d(${x}px,0,0)`;
+        const region = peaks && TmWaveform.regionAt(peaks, t);
+        showReadout(tcLabel(clampToTrack(t)) + (region ? ' · dialogue' : ''), x);
+    });
+    timelineScroll.addEventListener('mouseleave', () => {
+        timelineWrap.classList.remove('tm-tl-hovering');
+        if (!rulerScrub && !dragState && !drawDraft) hideReadout();
+    });
+
+    // Wheel: Ctrl/⌘ zooms about the pointer; otherwise the strip pans (and
+    // while playing, the wheel jogs the video instead).
+    timelineScroll.addEventListener('wheel', e => {
+        e.preventDefault();
+        const x = e.clientX - timelineScroll.getBoundingClientRect().left;
+        if (e.ctrlKey || e.metaKey) {
+            zoomAt(pxPerSecond * Math.pow(1.0018, -e.deltaY), timeAtClientX(e.clientX), x);
+            return;
+        }
+        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        panBy(delta / pxPerSecond);
     }, { passive: false });
+
+    timelineScroll.addEventListener('dblclick', e => {
+        const block = e.target.closest?.('.tm-timeline-block');
+        if (!block) return;
+        const id = Number(block.dataset.id);
+        selectEvent(id, { scrollBlock: 'center', focusTranslation: true });
+    });
+
+    // Overview bar: press or drag to travel.
+    const ov = document.getElementById('timelineOverview');
+    const travel = clientX => {
+        const r = ov.getBoundingClientRect();
+        const t = clampToTrack((clientX - r.left) / r.width * timelineSpan());
+        if (playing()) seekTo(t);
+        else { stopGlide(); viewCentre = t; scheduleRulerRedraw(); }
+    };
+    ov?.addEventListener('mousedown', e => { if (e.button === 0) { overviewDrag = true; travel(e.clientX); e.preventDefault(); } });
+    document.addEventListener('mousemove', e => { if (overviewDrag) travel(e.clientX); });
+    document.addEventListener('mouseup', () => { overviewDrag = false; });
 }
 
+/* Dragging past the edge of the strip carries the view along, so a cue can
+   be dragged or drawn further than one screen. */
+function autoPanNearEdge(clientX) {
+    if (playing()) return;
+    const rect = timelineScroll.getBoundingClientRect();
+    const zone = 36;
+    const left = clientX - rect.left, right = rect.right - clientX;
+    const speed = 8 / pxPerSecond;
+    if (left < zone) { stopGlide(); viewCentre -= speed * (1 + (zone - left) / 8); scheduleRulerRedraw(); }
+    else if (right < zone) { stopGlide(); viewCentre += speed * (1 + (zone - right) / 8); scheduleRulerRedraw(); }
+}
 
-// ── Blocks: render, select, drag, resize ────────────
-function handleBlockSelect(e, id) {
+// ── Blocks: select, drag, resize ─────────────────────
+function handleBlockSelect(e, id, { seek = true } = {}) {
+    // Work the new selection out first and apply it only after selectEvent:
+    // selectEvent collapses whichever cue is open by comparing against
+    // activeId, so setting activeId beforehand left the old card open too.
+    let nextSel, nextActive;
     if (e.shiftKey && activeId != null) {
         const ids = events.map(ev => ev.id);
         const a = ids.indexOf(activeId), b = ids.indexOf(id);
         const [lo, hi] = a < b ? [a, b] : [b, a];
-        selectedIds = new Set(ids.slice(lo, hi + 1));
-        activeId = id;
+        nextSel = new Set(ids.slice(lo, hi + 1));
+        nextActive = id;
     } else if (e.ctrlKey || e.metaKey) {
-        if (selectedIds.has(id)) { selectedIds.delete(id); activeId = selectedIds.size ? [...selectedIds].pop() : null; }
-        else { selectedIds.add(id); activeId = id; }
+        nextSel = new Set(selectedIds);
+        if (nextSel.has(id)) { nextSel.delete(id); nextActive = nextSel.size ? [...nextSel].pop() : null; }
+        else { nextSel.add(id); nextActive = id; }
+    } else if (!selectedIds.has(id) || selectedIds.size <= 1) {
+        nextSel = new Set([id]);
+        nextActive = id;
     } else {
-        selectedIds = new Set([id]);
-        activeId = id;
+        nextSel = new Set(selectedIds);   // pressing inside a multi-selection keeps it, to move it as a group
+        nextActive = id;
     }
     const ev = events.find(x => x.id === id);
-    if (video && ev) video.currentTime = tcToSecs(ev.startTime);
+    if (seek && video && ev) seekFromTimeline(tcToSecs(ev.startTime));
     // Open the clicked cue in the panel too, so the timeline and the cue list
     // never disagree about what is being edited. A range or toggle selection
     // keeps its extra members; selectEvent would collapse them to one.
-    const range = new Set(selectedIds);
-    selectEvent(id, { scrollBlock: 'nearest' });
-    selectedIds = range;
+    if (nextActive != null) selectEvent(nextActive, { scrollBlock: 'nearest' });
+    selectedIds = nextSel;
+    activeId = nextActive;
     updateSelection();
-    scrollBlockIntoView(id);
+    scheduleRulerRedraw();
 }
 
-function snapValue(t, excludeIds) {
+function onBlockMouseDown(e, block) {
+    if (e.button !== 0) return;
+    const id = Number(block.dataset.id);
+    const handle = e.target.closest('.tm-block-handle');
+    const mode = handle ? (handle.classList.contains('tm-block-handle-left') ? 'resize-left' : 'resize-right') : 'move';
+    handleBlockSelect(e, id, { seek: false });
+    if (e.shiftKey || e.ctrlKey || e.metaKey) return;   // selection gestures, not drags
+    startDrag(e, id, mode);
+}
+
+/* Snapping, strongest first: shot changes, then where the dialogue starts
+   and stops, then other cues (and the minimum gap beside them), then the
+   playhead, and finally the frame grid. `edge` says which end of a cue is
+   moving, because the right spot near a cut differs: in-times go on the cut,
+   out-times a couple of frames before it. */
+function snapValue(t, excludeIds, edge = 'in') {
+    snapGuide = null;
     if (!snapEnabled) return t;
+    const frame = 1 / fps;
+    const reach = SNAP_PX / pxPerSecond;
     const candidates = [];
-    if (video) candidates.push(video.currentTime);
-    events.forEach(ev => {
-        if (excludeIds.includes(ev.id)) return;
-        candidates.push(tcToSecs(ev.startTime), tcToSecs(ev.endTime));
-    });
-    const frameLen = 1 / fps;
-    candidates.push(Math.round(t / frameLen) * frameLen);
-    // Where the dialogue actually starts and stops beats any round number,
-    // so the detected speech edges join the snap candidates.
+    const add = (value, kind, weight = 1) => {
+        if (Number.isFinite(value)) candidates.push({ value, kind, d: Math.abs(value - t) / weight });
+    };
+
+    if (snapToCuts && shotCuts.length && typeof TmShots !== 'undefined') {
+        const c = TmShots.nearest(shotCuts, t);
+        if (c != null) {
+            if (edge !== 'out') add(c, 'cut', 1.6);
+            if (edge !== 'in') add(c - OUT_BEFORE_CUT_FRAMES * frame, 'cut', 1.6);
+        }
+    }
     if (snapToAudio && peaks) {
-        const edge = TmWaveform.nearestEdge(peaks, t, SNAP_PX * 2 / pxPerSecond);
-        if (edge != null) candidates.push(edge);
+        const s = TmWaveform.nearestEdge(peaks, t, reach * 2);
+        if (s != null) add(s, 'speech', 1.2);
     }
-    const threshold = SNAP_PX / pxPerSecond;
-    let best = t, bestDist = threshold;
-    for (const c of candidates) {
-        const d = Math.abs(c - t);
-        if (d < bestDist) { bestDist = d; best = c; }
+    const minGap = deliveryProfile?.minGapSeconds ?? 0;
+    for (const ev of events) {
+        if (excludeIds.includes(ev.id)) continue;
+        const s = tcToSecs(ev.startTime), e = tcToSecs(ev.endTime);
+        if (Math.abs(s - t) > reach * 3 && Math.abs(e - t) > reach * 3) continue;
+        add(s, 'cue'); add(e, 'cue');
+        if (minGap > 0) { add(s - minGap, 'gap'); add(e + minGap, 'gap'); }
     }
-    return best;
+    if (video) add(video.currentTime, 'playhead');
+
+    let best = null;
+    for (const c of candidates) if (c.d <= reach && (!best || c.d < best.d)) best = c;
+    if (best) { snapGuide = { t: best.value, kind: best.kind }; return best.value; }
+    return Math.round(t / frame) * frame;
+}
+
+function blockLabelHtml(ev, i) {
+    const start = tcToSecs(ev.startTime), end = tcToSecs(ev.endTime);
+    const dur = Math.max(0, end - start);
+    const text = ev.translatedText || '';
+    const cps = text.trim() ? readingSpeed(text, ev.startTime, ev.endTime) : null;
+    return `<span class="tm-block-num">${i + 1}</span><span class="tm-block-meta">${dur.toFixed(2)}s${cps != null ? ' · ' + cps + ' cps' : ''}</span>`;
+}
+
+function blockTitle(ev, i, issues) {
+    const notes = shotNotes(ev).map(n => n.text);
+    const snippet = (ev.translatedText || ev.originalText || '').replace(/\s+/g, ' ').trim();
+    return `#${i + 1}  ${ev.startTime} → ${ev.endTime}`
+        + (snippet ? `\n${snippet.slice(0, 120)}` : '')
+        + (issues.length ? `\n⚠ ${issues.join(', ')}` : '')
+        + (notes.length ? `\n⚠ ${notes.join('; ')}` : '')
+        + (lockedIds.has(ev.id) ? '\nLocked' : '');
+}
+
+function blockStatusClass(ev, issues) {
+    // "Untranslated" is a workflow state, not a timing defect — it shouldn't
+    // paint a cue as a warning the moment it's created.
+    const hasRealIssue = issues.some(s => s !== 'Untranslated') || shotNotes(ev).length > 0;
+    return issues.includes('Invalid timing') ? ' tm-timeline-block-invalid'
+        : issues.includes('Overlapping cues') ? ' tm-timeline-block-overlap'
+        : hasRealIssue ? ' tm-timeline-block-warn'
+        : ev.translatedText?.trim() ? ' tm-timeline-block-done'
+        : ' tm-timeline-block-empty';
+}
+
+function fillBlock(block, ev, i) {
+    const start = tcToSecs(ev.startTime), end = tcToSecs(ev.endTime);
+    const origin = renderedWindow ? renderedWindow.origin : 0;
+    const width = Math.max((end - start) * pxPerSecond, 2);
+    const issues = issuesAt(i);
+    const isLocked = lockedIds.has(ev.id);
+    block.className = 'tm-timeline-block'
+        + (ev.id === activeId ? ' tm-timeline-block-active' : '')
+        + (selectedIds.has(ev.id) && ev.id !== activeId ? ' tm-timeline-block-selected' : '')
+        + blockStatusClass(ev, issues)
+        + (isLocked ? ' tm-timeline-block-locked' : '')
+        + (width < 26 ? ' tm-timeline-block-tiny' : width < 70 ? ' tm-timeline-block-narrow' : '');
+    block.style.left = ((start - origin) * pxPerSecond) + 'px';
+    block.style.width = width + 'px';
+    block.dataset.id = ev.id;
+    block.title = blockTitle(ev, i, issues);
+
+    const translated = (ev.translatedText || '').trim();
+    const body = translated || (ev.originalText || '').trim();
+    block.innerHTML =
+        `<div class="tm-block-head">${blockLabelHtml(ev, i)}${isLocked ? '<i class="bi bi-lock-fill tm-block-lock-icon"></i>' : ''}</div>`
+        + (showBlockText ? `<div class="tm-block-text${translated ? '' : ' tm-block-text-src'}" dir="auto">${escapeHtml(body)}</div>` : '')
+        + (isLocked ? '' : '<div class="tm-block-handle tm-block-handle-left"></div><div class="tm-block-handle tm-block-handle-right"></div>');
+}
+
+/* Renders the blocks within a window around the view — the view plus a full
+   screen either side — rather than every cue in the film. Panning inside that
+   window costs nothing but a transform; leaving it re-renders. */
+function renderTimelineBlocks() {
+    if (!timelineEvents) return;
+    const W = viewWidth() || 1200;
+    const span = W / pxPerSecond;
+    const t0 = viewStartSecs();
+    const from = t0 - span, to = t0 + span * 2;
+    renderedWindow = { from, to, origin: from, pps: pxPerSecond };
+    timelineEvents.innerHTML = '';
+    events.forEach((ev, i) => {
+        const start = tcToSecs(ev.startTime), end = tcToSecs(ev.endTime);
+        if (end < from || start > to) return;
+        const block = document.createElement('div');
+        fillBlock(block, ev, i);
+        timelineEvents.appendChild(block);
+    });
+    if (timelineInner) timelineInner.style.transform = `translate3d(${(from - t0) * pxPerSecond}px,0,0)`;
+}
+
+function ensureBlocksRendered() {
+    const W = viewWidth();
+    if (!W) return;
+    const t0 = viewStartSecs(), t1 = t0 + W / pxPerSecond;
+    if (!renderedWindow || renderedWindow.pps !== pxPerSecond
+        || t0 < renderedWindow.from || t1 > renderedWindow.to) {
+        renderTimelineBlocks();
+    }
 }
 
 function updateBlockDom(id) {
-    const ev = events.find(x => x.id === id);
+    const i = events.findIndex(x => x.id === id);
+    const ev = events[i];
     if (!ev) return;
-    const block = timelineEvents.querySelector(`.tm-timeline-block[data-id="${id}"]`);
+    const block = timelineEvents?.querySelector?.(`.tm-timeline-block[data-id="${id}"]`);
     if (block) {
-        block.style.left  = (tcToSecs(ev.startTime) * pxPerSecond) + 'px';
-        block.style.width = Math.max((tcToSecs(ev.endTime) - tcToSecs(ev.startTime)) * pxPerSecond, 3) + 'px';
+        fillBlock(block, ev, i);
     }
     const startInput = eventsList.querySelector(`.tm-tc-input[data-id="${id}"][data-field="startTime"]`);
     const endInput   = eventsList.querySelector(`.tm-tc-input[data-id="${id}"][data-field="endTime"]`);
     if (startInput) startInput.value = ev.startTime;
     if (endInput)   endInput.value   = ev.endTime;
+}
+
+/* Where a dragged cue has to stop: the nearest cue before and after it that
+   is not part of the drag. A cue already overlapping its neighbour is left
+   unconstrained on that side, or it could never be dragged clear. */
+function dragLimits(ids, origStart, origEnd) {
+    let lo = 0, hi = Infinity;
+    if (overlapsAllowed()) return { lo, hi };
+    for (const ev of events) {
+        if (ids.includes(ev.id)) continue;
+        const s = tcToSecs(ev.startTime), e = tcToSecs(ev.endTime);
+        if (e <= origStart + 1e-6 && e > lo) lo = e;
+        if (s >= origEnd - 1e-6 && s < hi) hi = s;
+    }
+    return { lo, hi };
 }
 
 function startDrag(e, id, mode) {
@@ -1538,55 +2195,79 @@ function startDrag(e, id, mode) {
     const orig = new Map();
     targets.forEach(tid => {
         const ev = events.find(x => x.id === tid);
-        orig.set(tid, { start: tcToSecs(ev.startTime), end: tcToSecs(ev.endTime) });
+        if (ev) orig.set(tid, { start: tcToSecs(ev.startTime), end: tcToSecs(ev.endTime) });
     });
-    dragState = { mode, ids: targets, primaryId: id, startX: e.clientX, orig };
+    const groupStart = Math.min(...[...orig.values()].map(o => o.start));
+    const groupEnd = Math.max(...[...orig.values()].map(o => o.end));
+    dragState = {
+        mode, ids: [...orig.keys()], primaryId: id, orig,
+        startX: e.clientX, startT: timeAtClientX(e.clientX), moved: false,
+        limits: dragLimits([...orig.keys()], groupStart, groupEnd),
+        groupStart, groupEnd,
+    };
     document.body.style.userSelect = 'none';
+    timelineWrap.classList.add('tm-tl-dragging');
     document.addEventListener('mousemove', onDragMove);
     document.addEventListener('mouseup', onDragEnd);
 }
 
 function onDragMove(e) {
     if (!dragState) return;
-    const { mode, ids, orig, primaryId } = dragState;
-    const deltaSecs = (e.clientX - dragState.startX) / pxPerSecond;
+    const { mode, ids, orig, primaryId, limits } = dragState;
+    if (!dragState.moved && Math.abs(e.clientX - dragState.startX) < 3) return;
+    dragState.moved = true;
+    autoPanNearEdge(e.clientX);
+    const delta = timeAtClientX(e.clientX) - dragState.startT;
+    const minDur = MIN_CUE_DUR;
+    const p = orig.get(primaryId);
+    let readoutT;
 
     if (mode === 'move') {
-        let clampedDelta = deltaSecs;
-        const minStart = Math.min(...[...orig.values()].map(o => o.start));
-        if (minStart + clampedDelta < 0) clampedDelta = -minStart;
-        const primary = orig.get(primaryId);
-        const snappedStart = snapValue(primary.start + clampedDelta, ids);
-        const snapDelta = snappedStart - primary.start;
+        // Snap whichever end of the primary cue lands closer to something.
+        const sIn = snapValue(p.start + delta, ids, 'in');
+        const gIn = snapGuide;
+        const sOut = snapValue(p.end + delta, ids, 'out');
+        const gOut = snapGuide;
+        let d = delta;
+        if (gIn && (!gOut || Math.abs(sIn - (p.start + delta)) <= Math.abs(sOut - (p.end + delta)))) { d = sIn - p.start; snapGuide = gIn; }
+        else if (gOut) { d = sOut - p.end; snapGuide = gOut; }
+        else d = sIn - p.start;
+        // Keep the whole group inside its free stretch of track.
+        d = Math.max(d, limits.lo - dragState.groupStart, -dragState.groupStart);
+        d = Math.min(d, limits.hi - dragState.groupEnd);
         ids.forEach(id => {
             const o = orig.get(id);
             const ev = events.find(x => x.id === id);
-            const newStart = Math.max(0, o.start + snapDelta);
-            ev.startTime = secsToSrtTc(newStart);
-            ev.endTime   = secsToSrtTc(newStart + (o.end - o.start));
+            ev.startTime = secsToSrtTc(o.start + d);
+            ev.endTime = secsToSrtTc(o.end + d);
             updateBlockDom(id);
         });
+        readoutT = p.start + d;
     } else if (mode === 'resize-left') {
-        const o = orig.get(ids[0]);
-        const ev = events.find(x => x.id === ids[0]);
-        const newStart = Math.min(Math.max(snapValue(o.start + deltaSecs, ids), 0), o.end - MIN_CUE_DUR);
-        ev.startTime = secsToSrtTc(newStart);
-        updateBlockDom(ids[0]);
-    } else if (mode === 'resize-right') {
-        const o = orig.get(ids[0]);
-        const ev = events.find(x => x.id === ids[0]);
-        const newEnd = Math.max(snapValue(o.end + deltaSecs, ids), o.start + MIN_CUE_DUR);
-        ev.endTime = secsToSrtTc(newEnd);
-        updateBlockDom(ids[0]);
+        const ev = events.find(x => x.id === primaryId);
+        let s = snapValue(p.start + delta, ids, 'in');
+        s = Math.max(limits.lo, 0, Math.min(s, p.end - minDur));
+        if (snapGuide && Math.abs(snapGuide.t - s) > 1e-6) snapGuide = null;
+        ev.startTime = secsToSrtTc(s);
+        updateBlockDom(primaryId);
+        readoutT = s;
+    } else {
+        const ev = events.find(x => x.id === primaryId);
+        let en = snapValue(p.end + delta, ids, 'out');
+        en = Math.min(limits.hi, Math.max(en, p.start + minDur));
+        if (snapGuide && Math.abs(snapGuide.t - en) > 1e-6) snapGuide = null;
+        ev.endTime = secsToSrtTc(en);
+        updateBlockDom(primaryId);
+        readoutT = en;
     }
 
-    // Numbers, not eyeballing: during a drag this readout is the only place
-    // the new timing is legible before it is committed.
+    // The new timing, by number, right beside the edge being moved.
     const primary = events.find(x => x.id === primaryId);
     if (primary) {
-        const dur = tcToSecs(primary.endTime) - tcToSecs(primary.startTime);
-        showReadout(`<b>${tcLabel(tcToSecs(primary.startTime))}</b> \u2192 `
-            + `<b>${tcLabel(tcToSecs(primary.endTime))}</b> · ${dur.toFixed(2)}s`);
+        const s = tcToSecs(primary.startTime), en = tcToSecs(primary.endTime);
+        const cps = primary.translatedText?.trim() ? ` · ${readingSpeed(primary.translatedText, primary.startTime, primary.endTime)} cps` : '';
+        const snapNote = snapGuide ? ` · <i>${snapGuide.kind}</i>` : '';
+        showReadout(`<b>${tcLabel(s)}</b> → <b>${tcLabel(en)}</b> · ${(en - s).toFixed(2)}s${cps}${snapNote}`, xOfTime(readoutT));
     }
     scheduleRulerRedraw();
 }
@@ -1595,87 +2276,25 @@ function onDragEnd() {
     document.removeEventListener('mousemove', onDragMove);
     document.removeEventListener('mouseup', onDragEnd);
     document.body.style.userSelect = '';
+    timelineWrap.classList.remove('tm-tl-dragging');
     hideReadout();
+    snapGuide = null;
     if (dragState) {
-        const changed = dragState.ids.some(id => {
+        const { moved, primaryId } = dragState;
+        const changed = moved && dragState.ids.some(id => {
             const o = dragState.orig.get(id);
             const ev = events.find(x => x.id === id);
             return Math.abs(tcToSecs(ev.startTime) - o.start) > 0.0005 || Math.abs(tcToSecs(ev.endTime) - o.end) > 0.0005;
         });
         if (changed) { markDirty(); renderEvents(); renderTimelineBlocks(); }
+        else if (!moved) {
+            // A click, not a drag: put the playhead on the cue.
+            const ev = events.find(x => x.id === primaryId);
+            if (ev) seekFromTimeline(tcToSecs(ev.startTime));
+        }
     }
     dragState = null;
-}
-
-function renderTimelineBlocks() {
-    if (!timelineEvents || !timelineSpan()) return;
-    timelineEvents.innerHTML = '';
-
-    events.forEach((ev, i) => {
-        const start = tcToSecs(ev.startTime);
-        const end   = tcToSecs(ev.endTime);
-        const left  = start * pxPerSecond;
-        const width = Math.max((end - start) * pxPerSecond, 3);
-        const issues = issuesAt(i);
-        const isLocked = lockedIds.has(ev.id);
-        const isMultiSelected = selectedIds.has(ev.id) && ev.id !== activeId;
-        // "Untranslated" is a workflow state, not a timing defect — it shouldn't
-        // paint a cue as a warning the moment it's created.
-        const hasRealIssue = issues.some(i => i !== 'Untranslated');
-        const statusClass = issues.includes('Invalid timing') ? ' tm-timeline-block-invalid'
-            : issues.includes('Overlapping cues') ? ' tm-timeline-block-overlap'
-            : hasRealIssue ? ' tm-timeline-block-warn'
-            : ev.translatedText?.trim() ? ' tm-timeline-block-done'
-            : '';
-
-        const block = document.createElement('div');
-        block.className = 'tm-timeline-block'
-            + (ev.id === activeId ? ' tm-timeline-block-active' : '')
-            + (isMultiSelected ? ' tm-timeline-block-selected' : '')
-            + statusClass
-            + (isLocked ? ' tm-timeline-block-locked' : '');
-        block.style.left  = left + 'px';
-        block.style.width = width + 'px';
-        block.dataset.id  = ev.id;
-        const snippet = (ev.translatedText || ev.originalText || '').replace(/\s+/g, ' ').trim();
-        block.title = `#${ev.index} ${ev.startTime} → ${ev.endTime}`
-            + (snippet ? ` · ${snippet.slice(0, 60)}` : '')
-            + (issues.length ? ` · ${issues.join(', ')}` : '')
-            + (isLocked ? ' · Locked' : '');
-
-        if (width > 34) {
-            const label = document.createElement('span');
-            label.className = 'tm-block-label';
-            label.textContent = `#${ev.index}${snippet ? ' · ' + snippet.slice(0, 30) : ''}`;
-            block.appendChild(label);
-        }
-        if (isLocked) {
-            const lockIcon = document.createElement('i');
-            lockIcon.className = 'bi bi-lock-fill tm-block-lock-icon';
-            block.appendChild(lockIcon);
-        } else {
-            const leftHandle  = document.createElement('div');
-            const rightHandle = document.createElement('div');
-            leftHandle.className  = 'tm-block-handle tm-block-handle-left';
-            rightHandle.className = 'tm-block-handle tm-block-handle-right';
-            leftHandle.addEventListener('mousedown',  e => { handleBlockSelect(e, ev.id); startDrag(e, ev.id, 'resize-left'); });
-            rightHandle.addEventListener('mousedown', e => { handleBlockSelect(e, ev.id); startDrag(e, ev.id, 'resize-right'); });
-            block.appendChild(leftHandle);
-            block.appendChild(rightHandle);
-        }
-
-        block.addEventListener('mousedown', e => {
-            handleBlockSelect(e, ev.id);
-            if (!isLocked) startDrag(e, ev.id, 'move');
-        });
-        timelineEvents.appendChild(block);
-    });
-}
-
-function updateCursor() {
-    if (!video?.duration) return;
-    cursor.style.left = (video.currentTime * pxPerSecond) + 'px';
-    if (!video.paused) keepPlayheadVisible();
+    scheduleRulerRedraw();
 }
 
 // ══════════════════════════════════════════════════
@@ -1834,7 +2453,8 @@ function cueRowHtml(ev, i) {
     const marks    = reviewChips(ev)
                    + statusChip(ev)
                    + (ev.comment?.trim() ? '<i class="bi bi-chat-left-text-fill" title="Has a comment"></i>' : '')
-                   + (isLocked ? '<i class="bi bi-lock-fill" title="Locked"></i>' : '');
+                   + (isLocked ? '<i class="bi bi-lock-fill" title="Locked"></i>' : '')
+                   + (typeof TmWorkspace !== 'undefined' ? TmWorkspace.rowMarks(ev) : '');
     return `<div class="tm-cue-item tm-cue-row${isLocked ? ' tm-event-locked' : ''}" data-id="${ev.id}" role="button" tabindex="0" aria-label="Cue ${i + 1}, ${STATUS_TITLE[status]}">
 <span class="tm-cue-status tm-cue-status-${status}" title="${STATUS_TITLE[status]}"></span>
 <span class="tm-cue-num">${i + 1}</span>
@@ -1845,6 +2465,16 @@ function cueRowHtml(ev, i) {
 <span class="tm-cue-marks">${marks}</span>
 </div>`;
 }
+
+// Language tags for the text boxes, so the browser's spellchecker (and
+// screen readers) use the right language for each side.
+const LANG_CODES = (() => {
+    const map = { english: 'en', arabic: 'ar', french: 'fr', spanish: 'es', german: 'de', italian: 'it', portuguese: 'pt', turkish: 'tr',
+                  russian: 'ru', chinese: 'zh', japanese: 'ja', korean: 'ko', hindi: 'hi', urdu: 'ur', persian: 'fa', farsi: 'fa', hebrew: 'he', dutch: 'nl' };
+    const meta = typeof document !== 'undefined' ? document.getElementById('projectMeta')?.dataset : null;
+    const code = name => map[String(name || '').trim().toLowerCase()] || '';
+    return { source: code(meta?.source), target: code(meta?.target) };
+})();
 
 function cueCardHtml(ev, i, open = true) {
     const cps      = readingSpeed(ev.translatedText, ev.startTime, ev.endTime);
@@ -1885,6 +2515,8 @@ function cueCardHtml(ev, i, open = true) {
                 aria-label="Cue ${i + 1} status" title="Where this line stands in your workflow">
             ${CUE_STATUS.map(s => `<option value="${s.value}"${(ev.status || 0) === s.value ? ' selected' : ''}>${s.label}</option>`).join('')}
         </select>` : ''}
+        <button class="tm-icon-btn-sm tm-marks-btn${(ev.flags | 0) || ev.bookmarked ? ' tm-marks-btn-has' : ''}" data-id="${ev.id}" type="button"
+                title="Marks: needs translation / timing / review, question, bookmark, review state" aria-haspopup="dialog"><i class="bi bi-flag${(ev.flags | 0) ? '-fill' : ''}"></i></button>
         <button class="tm-icon-btn-sm tm-comment-btn${hasNote ? ' tm-comment-btn-has' : ''}" data-id="${ev.id}"
                 title="Add or view a comment on this line"><i class="bi bi-chat-left-text${hasNote ? '-fill' : ''}"></i></button>
         <button class="tm-icon-btn-sm tm-lock-btn" data-id="${ev.id}"
@@ -1898,7 +2530,7 @@ function cueCardHtml(ev, i, open = true) {
                 <i class="bi bi-lock-fill"></i> Original
                 <span class="tm-original-locked-badge">${ev.originalLocked ? 'Imported — read-only' : 'Read-only'}</span>
             </div>
-            <textarea dir="auto" aria-label="Cue ${i + 1} source text" class="tm-original-input"
+            <textarea dir="auto" lang="${LANG_CODES.source}" aria-label="Cue ${i + 1} source text" class="tm-original-input"
                       placeholder="Import a script or type original text…"
                       data-field="originalText" data-id="${ev.id}" disabled>${escapeHtml(ev.originalText || '')}</textarea>
         </div>
@@ -1907,7 +2539,7 @@ function cueCardHtml(ev, i, open = true) {
                 <span><i class="bi bi-pencil-fill"></i> Translation</span>
                 <span class="tm-char-counter">${charCountDisplay(ev.translatedText || '')}</span>
             </div>
-            <textarea dir="auto" aria-label="Cue ${i + 1} translation" class="tm-translated-input ${charCountClass(ev.translatedText || '')}"
+            <textarea dir="auto" lang="${LANG_CODES.target}" spellcheck="true" aria-label="Cue ${i + 1} translation" class="tm-translated-input ${charCountClass(ev.translatedText || '')}"
                       placeholder="${CAN_EDIT_TRANSLATION ? 'Type your translation here…' : 'The translator\'s line — suggest a change in the next column.'}"
                       data-field="translatedText" data-id="${ev.id}" ${dis}${CAN_EDIT_TRANSLATION ? '' : ' readonly'}>${escapeHtml(ev.translatedText || '')}</textarea>
         </div>
@@ -2026,6 +2658,7 @@ function refreshCue(id, { keepCaret = true } = {}) {
     holder.innerHTML = cueHtml(events[idx], idx);
     const fresh = holder.firstElementChild;
     node.replaceWith(fresh);
+    if (typeof TmWorkspace !== 'undefined' && !fresh.classList.contains('tm-cue-row')) TmWorkspace.paintCardHint(fresh, idx);
     return fresh;
 }
 
@@ -2190,6 +2823,7 @@ eventsList.addEventListener('input', e => {
 
     const card = e.target.closest('.tm-cue-item');
     if (field === 'translatedText') {
+        updateBlockDom(id);
         const badge = card?.querySelector('.tm-cps-badge');
         if (badge) badge.textContent = readingSpeed(ev.translatedText, ev.startTime, ev.endTime) + ' c/s';
         const counter = card?.querySelector('.tm-char-counter');
@@ -2285,10 +2919,12 @@ function markDirty() {
     saveDraft();
     recordHistory();
     updateWorkspace();
-    saveStatus.textContent = '● Unsaved';
-    saveStatus.className   = 'tm-save-status tm-save-unsaved';
+    // A state that explains why nothing is reaching the server outranks the
+    // plain "unsaved" note, which would hide the real problem.
+    if (!['offline', 'auth', 'stale', 'forbidden'].includes(saveState)) paintSaveState('unsaved');
+    if (typeof TmWorkspace !== 'undefined') TmWorkspace.onEdited?.();
     clearTimeout(autoSaveTimer);
-    autoSaveTimer = setTimeout(() => doSave(), 2000);
+    if (!revisionStale) autoSaveTimer = setTimeout(() => doSave(), 2000);
 }
 
 // The server matches cues to stored rows by id. A new cue goes up with a
@@ -2406,9 +3042,7 @@ let mergeAttempts = 0;
 async function rebaseOnServer() {
     if (++mergeAttempts > 3) return false;   // keeps losing the race; let a person look
     try {
-        const res = await fetch(`/studio/${PROJECT_ID}/events`);
-        if (!res.ok) return false;
-        const payload = await res.json();
+        const payload = await api(`/studio/${PROJECT_ID}/events`);
         if (!Array.isArray(payload?.events) || typeof payload.revision !== 'number') return false;
         const merged = mergeWithServer(events, payload.events);
         if (!merged) return false;
@@ -2432,79 +3066,320 @@ async function rebaseOnServer() {
     }
 }
 
-async function doSave() {
-    if (!loaded || saving || revisionStale) return;
-    if (events.some(ev => SubtitleCore.issues(ev, []).includes('Invalid timing'))) {
-        saveStatus.textContent = 'Fix invalid timing before saving';
-        saveStatus.className = 'tm-save-status tm-save-error';
-        return;
+// ── Talking to the server ──────────────────────────
+/* Every editor request goes through api(), which turns the many ways a
+   request can fail into a few kinds the save logic can act on:
+     offline  — the browser knows it has no network; nothing was sent
+     network  — the request could not complete; it may or may not have landed
+     timeout  — no answer in time; it may or may not have landed
+     auth     — the sign-in expired (a 401, or a login page where JSON was due)
+     forbidden, conflict, antiforgery, invalid, bad, server — as named
+   "May or may not have landed" matters: such a save is re-sent with the same
+   save id, which the server recognises (see SaveEvents), so a lost response
+   can never turn into a duplicate or a conflict with itself. */
+let csrfToken = document.querySelector('[name="__RequestVerificationToken"]')?.value || '';
+
+class ApiError extends Error {
+    constructor(kind, status = 0, data = null) {
+        super(data?.message || kind);
+        this.kind = kind;
+        this.status = status;
+        this.data = data;
     }
-    saving = true;
-    const savedRevision = revision;
-    saveStatus.textContent = 'Saving…';
+}
+
+const isOffline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
+
+async function api(path, { method = 'GET', body, timeout = 30000 } = {}) {
+    const headers = { 'Accept': 'application/json', 'X-TraMslate-Api': '1' };
+    if (body !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        headers['RequestVerificationToken'] = csrfToken;
+    }
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeout) : null;
+    let res;
     try {
-        const res = await fetch('/studio/' + PROJECT_ID + '/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'RequestVerificationToken': document.querySelector('[name="__RequestVerificationToken"]').value },
-            body: JSON.stringify({
-                revision: loadedRevision,
-                events: events.map(ev => ({ ...ev,
-                    id: storedIdFor(ev.id),
-                    startTime: secsToSrtTc(tcToSecs(ev.startTime)),
-                    endTime: secsToSrtTc(tcToSecs(ev.endTime))
-                }))
-            })
+        res = await fetch(path, {
+            method, headers, credentials: 'same-origin',
+            body: body === undefined ? undefined : JSON.stringify(body),
+            signal: ctrl?.signal,
         });
-        // 409 means someone else saved after this editor loaded. Stop
-        // auto-saving rather than fight over the project, and give the
-        // translator a way out that cannot lose their work.
-        if (res.status === 409) {
-            if (await rebaseOnServer()) {
-                saveStatus.textContent = IS_REVISOR ? 'Merged the translator\'s changes — saving…' : 'Merged the revisor\'s changes — saving…';
-                // finally{} sees the revision still unsaved and saves again.
-                revision++;
-                return;
-            }
-            revisionStale = true;
-            clearTimeout(autoSaveTimer);
-            saveStatus.textContent = 'Not saved — newer version on the server';
-            saveStatus.className = 'tm-save-status tm-save-error';
-            showBanner(
-                'This project was saved somewhere else after you opened it, so your changes were not saved. '
-                + 'Export your work first if you want to keep it, then reload.',
-                'danger',
-                [
-                    { label: 'Export SRT', run: () => btnExportSrt.click() },
-                    { label: 'Reload', run: () => { clearDraft(); location.reload(); } },
-                ]);
-            return;
+    } catch (err) {
+        throw new ApiError(isOffline() ? 'offline' : err?.name === 'AbortError' ? 'timeout' : 'network');
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+    let data = null;
+    try { data = await res.json(); } catch { /* not JSON */ }
+    if (res.ok) {
+        // A redirect to the login page arrives as 200 + HTML.
+        if (data === null) throw new ApiError('auth', res.status);
+        return data;
+    }
+    const kind = res.status === 401 ? 'auth'
+        : res.status === 403 ? 'forbidden'
+        : res.status === 409 ? 'conflict'
+        : res.status === 422 ? 'invalid'
+        : res.status === 400 && data === null ? 'antiforgery'
+        : res.status >= 500 ? 'server'
+        : 'bad';
+    throw new ApiError(kind, res.status, data);
+}
+
+// After signing in again elsewhere, the token this page was rendered with
+// belongs to the old session.
+async function refreshToken() {
+    try {
+        const data = await api(`/studio/${PROJECT_ID}/token`);
+        if (data?.token) { csrfToken = data.token; return true; }
+    } catch { /* still signed out */ }
+    return false;
+}
+
+const newSaveId = () => (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
+// ── Save state ─────────────────────────────────────
+/* The status shown next to Save. "Saved" is only ever shown when the server
+   has confirmed the version on screen; anything else says what is true. */
+let saveState     = 'loading';   // loading | saved | unsaved | saving | offline | failed | auth | stale | forbidden
+let saveDetail    = '';
+let lastSavedAt   = null;
+let uncertainSave = null;        // { body, savedRevision } of a save whose outcome is unknown
+let retryTimer    = null;
+let retryIndex    = 0;
+let localCopyOk   = true;        // false once this browser refused a recovery copy
+const RETRY_DELAYS = [2, 5, 15, 30, 60];
+
+const SAVE_LABELS = {
+    loading:   'Loading…',
+    saved:     'All changes saved',
+    unsaved:   '● Unsaved changes',
+    saving:    'Saving…',
+    offline:   'Offline — kept in this browser only',
+    failed:    'Save failed — retry Save',
+    auth:      'Signed out — kept in this browser only',
+    stale:     'Not saved — newer version on the server',
+    forbidden: 'Not saved — you no longer have access',
+};
+const SAVE_CLASSES = {
+    loading: 'tm-save-saving', saved: 'tm-save-ok', unsaved: 'tm-save-unsaved', saving: 'tm-save-saving',
+    offline: 'tm-save-error', failed: 'tm-save-error', auth: 'tm-save-error', stale: 'tm-save-error', forbidden: 'tm-save-error',
+};
+
+function clockTime(when) {
+    const d = when instanceof Date ? when : new Date(when);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function paintSaveState(state = saveState, detail = '') {
+    saveState = state;
+    saveDetail = detail;
+    let text = detail || SAVE_LABELS[state] || state;
+    if (state === 'saved' && lastSavedAt) text += ` · ${clockTime(lastSavedAt)}`;
+    if (!localCopyOk && state !== 'saved') text += ' (no local copy)';
+    saveStatus.textContent = text;
+    saveStatus.className = 'tm-save-status ' + (SAVE_CLASSES[state] || '');
+    saveStatus.title = lastSavedAt
+        ? `Last saved to the server at ${new Date(lastSavedAt).toLocaleString()}`
+        : 'Not saved to the server yet in this session';
+    if (typeof TmWorkspace !== 'undefined') TmWorkspace.onSaveState?.(state);
+}
+
+function scheduleRetry() {
+    clearTimeout(retryTimer);
+    const delay = RETRY_DELAYS[Math.min(retryIndex, RETRY_DELAYS.length - 1)];
+    retryIndex++;
+    paintSaveState('failed', `Save failed — retrying in ${delay}s`);
+    retryTimer = setTimeout(() => doSave(), delay * 1000);
+}
+
+// ── Saving ─────────────────────────────────────────
+function cueForServer(ev) {
+    return {
+        ...ev,
+        id: storedIdFor(ev.id),
+        startTime: secsToSrtTc(tcToSecs(ev.startTime)),
+        endTime: secsToSrtTc(tcToSecs(ev.endTime)),
+        waiversJson: Array.isArray(ev.waivers) && ev.waivers.length ? JSON.stringify(ev.waivers) : (ev.waiversJson ?? null),
+    };
+}
+
+function buildSaveBody(checkpoint) {
+    const body = {
+        revision: loadedRevision,
+        saveId: newSaveId(),
+        events: events.map(cueForServer),
+    };
+    if (typeof CAN_EDIT_TRANSLATION === 'undefined' || CAN_EDIT_TRANSLATION) body.settingsJson = JSON.stringify(projectSettings());
+    if (checkpoint) body.checkpoint = checkpoint;
+    return body;
+}
+
+/* Saves the current track. Resolves true once the version on screen (or at
+   least the one that was on screen when this save started) is on the server.
+   Only one save is ever in flight, so saves cannot finish out of order. */
+async function doSave({ manual = false, checkpoint = null } = {}) {
+    if (!loaded || saving || revisionStale) return false;
+    clearTimeout(retryTimer);
+    saving = true;
+    let ok = false;
+    try {
+        // Settle a save whose answer never came before building on it.
+        if (uncertainSave) {
+            const settled = await sendSave(uncertainSave.body, uncertainSave.savedRevision);
+            if (!settled) return false;
         }
-        if (!res.ok) throw new Error('Save failed');
-        const data = await res.json();
-        if (!data.success) throw new Error('Save failed');
-        if (Array.isArray(data.assigned)) adoptStoredIds(data.assigned);
-        if (Array.isArray(data.events)) rememberBaseline(data.events);
-        mergeAttempts = 0;
-        if (typeof data.revision === 'number') { loadedRevision = data.revision; announceSave(data.revision); }
-        isDirty = revision !== savedRevision;
-        // The server copy is now authoritative for everything saved, so the
-        // local draft is only worth keeping if edits arrived mid-flight.
-        if (isDirty) writeDraft(); else clearDraft();
-        saveStatus.textContent = isDirty ? 'Unsaved changes' : 'All changes saved';
-        saveStatus.className = 'tm-save-status ' + (isDirty ? 'tm-save-unsaved' : 'tm-save-ok');
-    } catch {
-        isDirty = true;
-        saveStatus.textContent = 'Save failed — retry Save';
-        saveStatus.className = 'tm-save-status tm-save-error';
+        if (!isDirty && !checkpoint) {
+            if (manual && lastSavedAt) paintSaveState('saved');
+            ok = true;
+            return true;
+        }
+        const savedRevision = revision;
+        ok = await sendSave(buildSaveBody(checkpoint), savedRevision);
+        return ok;
     } finally {
         saving = false;
-        if (revision !== savedRevision) { clearTimeout(autoSaveTimer); autoSaveTimer = setTimeout(doSave, 1000); }
+        if (ok && isDirty && !revisionStale) { clearTimeout(autoSaveTimer); autoSaveTimer = setTimeout(doSave, 1000); }
+        // Anything that depends on "a save is in flight" (Done) looks again
+        // now that none is.
+        if (typeof TmWorkspace !== 'undefined') TmWorkspace.onSaveState?.(saveState);
     }
+}
+
+async function sendSave(body, savedRevision) {
+    paintSaveState('saving');
+    let data;
+    try {
+        data = await api(`/studio/${PROJECT_ID}/save`, { method: 'POST', body, timeout: 45000 });
+    } catch (err) {
+        return saveFailed(err, body, savedRevision);
+    }
+    if (!data?.success) return saveFailed(new ApiError('server', 200, data), body, savedRevision);
+
+    uncertainSave = null;
+    retryIndex = 0;
+    if (Array.isArray(data.assigned)) adoptStoredIds(data.assigned);
+    if (Array.isArray(data.events)) rememberBaseline(data.events);
+    mergeAttempts = 0;
+    if (typeof data.revision === 'number') { loadedRevision = data.revision; announceSave(data.revision); }
+    lastSavedAt = data.savedAt ? new Date(data.savedAt) : new Date();
+    isDirty = revision !== savedRevision;
+    if (data.status) paintProjectStatus(data.status);
+    if (typeof TmWorkspace !== 'undefined') TmWorkspace.onSaved?.(data);
+    // The server copy is now authoritative for everything saved, so the
+    // local draft is only worth keeping if edits arrived mid-flight.
+    if (isDirty) writeDraft(); else clearDraft();
+    hideBannerFor('save');
+    paintSaveState(isDirty ? 'unsaved' : 'saved');
+    return true;
+}
+
+async function saveFailed(err, body, savedRevision) {
+    isDirty = true;
+    writeDraft();
+    switch (err.kind) {
+        case 'conflict':
+            // Someone else saved after this editor loaded. Most of the time
+            // they changed other fields and a merge settles it; otherwise both
+            // versions are kept and the translator chooses.
+            uncertainSave = null;
+            if (await rebaseOnServer()) {
+                paintSaveState('saving', IS_REVISOR ? 'Merged the translator\'s changes — saving…' : 'Merged the revisor\'s changes — saving…');
+                revision++;
+                return true;   // doSave's finally sees the track dirty and saves again
+            }
+            enterConflict();
+            return false;
+        case 'antiforgery':
+            if (!body.__tokenRetried && await refreshToken()) {
+                body.__tokenRetried = true;
+                return sendSave(body, savedRevision);
+            }
+            paintSaveState('auth');
+            showBanner('Your session changed, so this save was refused. Your work is kept in this browser. Reload the page after signing in to continue.',
+                'danger', [{ label: 'Retry', run: () => doSave() }], 'save');
+            return false;
+        case 'auth':
+            paintSaveState('auth');
+            showBanner('Your sign-in has expired. Nothing is lost — your work is kept in this browser. Sign in again in another tab, then press Retry here.',
+                'danger', [
+                    { label: 'Sign in (new tab)', run: () => window.open('/login', '_blank') },
+                    { label: 'Retry', run: async () => { await refreshToken(); doSave(); } },
+                ], 'save');
+            return false;
+        case 'forbidden':
+            paintSaveState('forbidden');
+            showBanner('The server refused this save: you no longer have access to this project. Your work is kept in this browser — export it so it is not lost.',
+                'danger', [{ label: 'Export SRT', run: () => btnExportSrt.click() }], 'save');
+            return false;
+        case 'offline':
+            paintSaveState('offline');
+            return false;   // the 'online' event retries
+        case 'bad':
+        case 'invalid':
+            uncertainSave = null;
+            paintSaveState('failed', 'Save refused — see the message above');
+            showBanner(`The server refused this save: ${err.data?.message || 'the request was not accepted.'} Your work is kept in this browser.`,
+                'danger', [{ label: 'Retry', run: () => doSave() }], 'save');
+            return false;
+        default:
+            // network, timeout, server: it may have landed. Re-send the exact
+            // same request (same save id) before anything else.
+            uncertainSave = { body, savedRevision };
+            scheduleRetry();
+            return false;
+    }
+}
+
+/* Two real versions exist. Neither is thrown away: this editor's version is
+   stored on the server as a conflict copy (and stays in the local draft), the
+   server's stays as it is, and the person chooses. */
+function enterConflict() {
+    revisionStale = true;
+    clearTimeout(autoSaveTimer);
+    paintSaveState('stale');
+    keepCheckpoint(6, 'Your version when a save conflicted');
+    showBanner(
+        'Someone saved this project after you opened it, and you both changed the same lines, so your changes were not saved. '
+        + 'Both versions are kept — compare them and choose.',
+        'danger',
+        [
+            { label: 'Compare versions', run: () => (typeof TmWorkspace !== 'undefined' ? TmWorkspace.openConflict() : location.reload()) },
+            { label: 'Export SRT', run: () => btnExportSrt.click() },
+            { label: 'Reload', run: () => { clearDraft(); location.reload(); } },
+        ], 'save');
+}
+
+/* Stores the current track on the server as a recovery copy without saving
+   it over the project. Used before imports, bulk changes and restores, and
+   when a save conflicts. Best-effort: a failure leaves the local draft. */
+async function keepCheckpoint(kind, label, cues = events) {
+    try {
+        await api(`/studio/${PROJECT_ID}/checkpoint`, {
+            method: 'POST',
+            body: { kind, label, revision: loadedRevision, events: cues.map(cueForServer), settingsJson: JSON.stringify(projectSettings()) },
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('online', () => {
+        if (loaded && (isDirty || uncertainSave) && !revisionStale) doSave();
+    });
+    window.addEventListener('offline', () => {
+        if (loaded && (isDirty || saving)) paintSaveState('offline');
+    });
 }
 
 btnSave.addEventListener('click', () => {
     clearTimeout(autoSaveTimer);
-    doSave();
+    doSave({ manual: true });
 });
 
 // ══════════════════════════════════════════════════
@@ -2515,6 +3390,9 @@ btnSave.addEventListener('click', () => {
 importScript?.addEventListener('change', async () => {
     const file = importScript.files[0];
     if (!file || !loaded) return;
+    // The previewing importer (transfer.js) replaces the direct one below,
+    // which stays as the fallback where that script is absent.
+    if (typeof TmTransfer !== 'undefined') { importScript.value = ''; TmTransfer.importFile(file); return; }
     const isDocx = /\.docx$/i.test(file.name);
     try {
         let parsed, notice = '';
@@ -2551,6 +3429,7 @@ importScript?.addEventListener('change', async () => {
 // ══════════════════════════════════════════════════
 
 btnExportSrt.addEventListener('click', () => {
+    if (typeof TmTransfer !== 'undefined') { TmTransfer.openExport('srt'); return; }
     if (!validateExport()) return;
     let srt = '';
     events.forEach((ev, i) => {
@@ -2562,6 +3441,7 @@ btnExportSrt.addEventListener('click', () => {
 });
 
 btnExportVtt.addEventListener('click', () => {
+    if (typeof TmTransfer !== 'undefined') { TmTransfer.openExport('vtt'); return; }
     if (!validateExport()) return;
     let vtt = 'WEBVTT\n\n';
     events.forEach((ev, i) => {
@@ -2617,6 +3497,8 @@ function paintProfileControls() {
 function applyProfileChange() {
     deliveryProfile = SubtitleCore.normaliseProfile(deliveryProfile);
     storeProfile();
+    // The profile is project data now, saved with the cues.
+    if (loaded) markDirty();
     invalidateIssues();
     // Thresholds feed the row dots, the counters and the timeline colours, so
     // everything on screen has to be redrawn against the new numbers.
@@ -2994,11 +3876,28 @@ function writeDraft() {
             revision: loadedRevision,
             savedAt: Date.now(),
             events,
+            // The version these edits were made on top of, so a draft found
+            // after someone else saved can be merged rather than guessed at.
+            base: [...baseline.values()],
+            settings: projectSettings(),
         }));
+        if (!localCopyOk) { localCopyOk = true; paintSaveState(saveState, saveDetail); }
     } catch {
-        // Storage full or blocked (private window). The server save is still
-        // the real safety net; nothing here is worth interrupting work over.
+        // Storage full or blocked (private window). The server is still the
+        // real safety net, but the person must know there is no local copy.
+        if (localCopyOk) {
+            localCopyOk = false;
+            paintSaveState(saveState, saveDetail);
+            showBanner('This browser refused to keep a recovery copy (storage full or blocked). Work is only safe once it reaches the server — keep an eye on the save status.', 'warn');
+        }
     }
+}
+
+// Write the recovery copy now, not after the debounce, when the page may be
+// about to disappear (tab closed, navigated away, phone locked).
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('pagehide', () => { if (isDirty) writeDraft(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && isDirty) writeDraft(); });
 }
 
 function clearDraft() {
@@ -3017,26 +3916,102 @@ function readDraft() {
     }
 }
 
-// Offers a recovered draft when it differs from what the server just sent.
-// Comparing the serialised cues avoids nagging about a draft that simply
-// mirrors a save that did land.
-function offerDraftRecovery(serverEvents) {
+// ── Recovering unsaved work ───────────────────────
+// What changed between two versions of the track, for previews: counts plus
+// a few concrete examples a person can recognise.
+function diffSummary(before, after) {
+    const byId = new Map(before.map(ev => [ev.id, ev]));
+    const seen = new Set();
+    const samples = [];
+    let changed = 0, added = 0;
+    const fields = [['translatedText', 'Translation'], ['originalText', 'Source'], ['startTime', 'In'], ['endTime', 'Out'], ['comment', 'Note']];
+    after.forEach((ev, i) => {
+        const old = byId.get(ev.id);
+        if (!old) { added++; if (samples.length < 6) samples.push({ n: i + 1, what: 'Added', after: ev.translatedText || ev.originalText || '' }); return; }
+        seen.add(ev.id);
+        const diff = fields.find(([f]) => !sameValue(f, ev[f], old[f]));
+        if (diff) {
+            changed++;
+            if (samples.length < 6) samples.push({ n: i + 1, what: diff[1], before: old[diff[0]] || '', after: ev[diff[0]] || '' });
+        }
+    });
+    const removed = before.filter(ev => !seen.has(ev.id) && !after.some(x => x.id === ev.id)).length;
+    return { changed, added, removed, samples };
+}
+
+function diffText(d) {
+    const parts = [];
+    if (d.changed) parts.push(`${d.changed} changed`);
+    if (d.added) parts.push(`${d.added} added`);
+    if (d.removed) parts.push(`${d.removed} removed`);
+    return parts.length ? parts.join(', ') : 'no differences in text or timing';
+}
+
+function diffHtml(d) {
+    if (!d.samples.length) return '';
+    return '<ul class="tm-diff-list">' + d.samples.map(s =>
+        `<li><b>#${s.n} ${escapeHtml(s.what)}</b>`
+        + (s.before !== undefined ? ` <span class="tm-diff-old" dir="auto">${escapeHtml(String(s.before).slice(0, 80)) || '—'}</span> →` : '')
+        + ` <span class="tm-diff-new" dir="auto">${escapeHtml(String(s.after).slice(0, 80)) || '—'}</span></li>`).join('') + '</ul>';
+}
+
+/* Offers a recovery copy left by a tab that closed or crashed with unsaved
+   work. Shows what it would change, merges it into a newer saved version
+   when the edits do not collide, and never throws a copy away silently:
+   declining keeps it on the server as a recoverable version. */
+async function offerDraftRecovery(serverEvents, serverRevision) {
     const draft = readDraft();
     if (!draft) return false;
     if (JSON.stringify(draft.events) === JSON.stringify(serverEvents)) { clearDraft(); return false; }
 
-    const when = new Date(draft.savedAt || Date.now());
-    const age = describeAge(draft.savedAt);
-    const restore = confirm(
-        `Unsaved work from this browser was found for this project (${age}, ${draft.events.length} cues).\n\n`
-        + `OK — restore that work and continue from it.\n`
-        + `Cancel — discard it and open the last version saved on the server.\n\n`
-        + `Local copy: ${when.toLocaleString()}`);
+    let candidate = draft.events;
+    let note = '';
+    if (draft.revision != null && serverRevision != null && draft.revision !== serverRevision) {
+        let merged = null;
+        if (Array.isArray(draft.base)) {
+            const current = baseline;
+            baseline = new Map(draft.base.map(ev => [ev.id, { ...ev }]));
+            merged = mergeWithServer(draft.events, serverEvents);
+            baseline = current;
+        }
+        if (merged) {
+            candidate = merged;
+            note = 'The project was saved elsewhere after this copy was made. Your unsaved edits do not collide with that newer version, so they will be merged into it.';
+        } else {
+            note = 'The project was saved elsewhere after this copy was made, and both changed the same lines. Restoring puts your copy back; the newer saved version is kept in the version history.';
+        }
+    }
 
-    if (!restore) { clearDraft(); return false; }
-    events = draft.events;
+    const d = diffSummary(serverEvents, candidate);
+    const age = describeAge(draft.savedAt);
+    const when = new Date(draft.savedAt || Date.now()).toLocaleString();
+    const restore = await chooseDialog({
+        title: 'Unsaved work found',
+        text: `This browser kept a copy of unsaved work for this project (${age}, ${draft.events.length} cues): ${diffText(d)} compared with the saved version.`
+            + (note ? '\n\n' + note : '')
+            + `\n\nOK — restore that work and continue from it.\nCancel — open the saved version; the local copy is kept in the version history.\n\nLocal copy: ${when}`,
+        html: `<p>This browser kept a copy of unsaved work for this project, from <b>${escapeHtml(age)}</b> (${escapeHtml(when)}), with ${draft.events.length} subtitles.</p>`
+            + `<p>Compared with the saved version: <b>${escapeHtml(diffText(d))}</b>.</p>`
+            + diffHtml(d)
+            + (note ? `<p class="tm-modal-note">${escapeHtml(note)}</p>` : ''),
+        choices: [
+            { label: 'Restore unsaved work', value: true, primary: true },
+            { label: 'Open the saved version', value: false },
+        ],
+    });
+
+    if (!restore) {
+        keepCheckpoint(6, `Local copy not restored (${when})`, draft.events);
+        clearDraft();
+        return false;
+    }
+    // The saved version is about to be replaced on screen and, at the next
+    // save, on the server; keep it reachable.
+    keepCheckpoint(5, 'Saved version before restoring a local copy');
+    events = candidate;
+    if (draft.settings) applyProjectSettings(draft.settings);
     markDirty();
-    showBanner('Restored unsaved work from this browser. Save when you are happy with it.', 'warn');
+    showBanner('Restored unsaved work from this browser. It will save automatically.', 'warn');
     return true;
 }
 
@@ -3051,10 +4026,11 @@ function describeAge(at) {
 }
 
 // ── Banner ────────────────────────────────────────
-function showBanner(message, tone = 'warn', actions = []) {
+function showBanner(message, tone = 'warn', actions = [], tag = '') {
     const bar = document.getElementById('editorBanner');
     if (!bar) return;
     bar.className = `tm-banner tm-banner-${tone}`;
+    if (bar.dataset) bar.dataset.tag = tag;
     bar.innerHTML = '';
 
     const text = document.createElement('span');
@@ -3083,6 +4059,52 @@ function showBanner(message, tone = 'warn', actions = []) {
 function hideBanner() {
     const bar = document.getElementById('editorBanner');
     if (bar) bar.hidden = true;
+}
+
+// Hides the banner only if it is the one a given process put up, so clearing
+// a save warning never dismisses an unrelated message.
+function hideBannerFor(tag) {
+    const bar = document.getElementById('editorBanner');
+    if (bar && !bar.hidden && bar.dataset?.tag === tag) bar.hidden = true;
+}
+
+/* A modal choice. Resolves with the chosen value, or the last choice's value
+   on Escape. Where there is no real page (the Node test stub) it falls back
+   to confirm() with the plain-text version. */
+function chooseDialog({ title, text, html, choices, pickable }) {
+    if (typeof document === 'undefined' || !document.body || typeof document.body.appendChild !== 'function') {
+        return Promise.resolve(confirm(`${title}\n\n${text}`) ? choices[0].value : choices[choices.length - 1].value);
+    }
+    return new Promise(resolve => {
+        const back = document.createElement('div');
+        back.className = 'tm-modal-backdrop';
+        const box = document.createElement('div');
+        box.className = 'tm-modal tm-choice-modal';
+        box.setAttribute('role', 'dialog');
+        box.setAttribute('aria-modal', 'true');
+        box.setAttribute('aria-labelledby', 'tmChoiceTitle');
+        box.innerHTML = `<h3 class="tm-modal-title" id="tmChoiceTitle">${escapeHtml(title)}</h3>`
+            + `<div class="tm-modal-msg">${html || escapeHtml(text).replace(/\n/g, '<br>')}</div><div class="tm-modal-actions"></div>`;
+        const actions = box.querySelector('.tm-modal-actions');
+        const done = value => { back.remove(); document.removeEventListener('keydown', onKey, true); resolve(value); };
+        const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); done(choices[choices.length - 1].value); } };
+        for (const c of choices) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = c.primary ? 'tm-btn tm-btn-primary' : 'tm-btn-sm';
+            b.textContent = c.label;
+            b.addEventListener('click', () => done(c.value));
+            actions.appendChild(b);
+        }
+        if (pickable) box.addEventListener('click', e => {
+            const pick = e.target.closest(pickable);
+            if (pick) done(pick.dataset.value);
+        });
+        back.appendChild(box);
+        document.body.appendChild(back);
+        document.addEventListener('keydown', onKey, true);
+        (actions.querySelector('.tm-btn-primary') || actions.querySelector('button'))?.focus();
+    });
 }
 
 // ── Other tabs ────────────────────────────────────
@@ -3133,9 +4155,7 @@ function announceSave(rev)  { channel?.postMessage({ type: 'saved', tabId: TAB_I
 
 (async () => {
     try {
-        const res = await fetch(`/studio/${PROJECT_ID}/events`);
-        if (!res.ok) throw new Error('Load failed');
-        const payload = await res.json();
+        const payload = await api(`/studio/${PROJECT_ID}/events`);
         // The endpoint used to return a bare array and now returns
         // { revision, events }; accept either so a cached response from an
         // older build cannot strand the editor.
@@ -3144,21 +4164,29 @@ function announceSave(rev)  { channel?.postMessage({ type: 'saved', tabId: TAB_I
         loadedRevision = Array.isArray(payload) ? null : payload.revision ?? null;
         events = serverEvents;
         rememberBaseline(serverEvents);
+        if (payload?.settings) applyProjectSettings(payload.settings);
+        else if (localStorage.getItem?.(PROFILE_KEY)) { /* keep the browser's profile; the first save stores it with the project */ }
+        if (payload?.status) paintProjectStatus(payload.status);
+        lastSavedAt = payload?.updatedAt ? new Date(payload.updatedAt) : null;
         loaded = true;
+        loadPayload = payload;
         history = [JSON.stringify(events)]; historyIndex = 0;
-        saveStatus.textContent = 'All changes saved';
-        offerDraftRecovery(serverEvents);
+        paintSaveState('saved');
+        if (typeof TmWorkspace !== 'undefined') TmWorkspace.onLoaded?.(payload);
+        await offerDraftRecovery(serverEvents, loadedRevision);
         reserveTempIds();
         announceTab();
-    } catch {
-        eventsList.textContent = 'Could not load subtitles. Reload the page to try again.';
+    } catch (err) {
+        eventsList.textContent = err?.kind === 'auth'
+            ? 'Your sign-in has expired. Sign in again, then reload this page.'
+            : 'Could not load subtitles. Reload the page to try again.';
         saveStatus.textContent = 'Load failed';
         return;
     }
     renderEvents();
     // Cues alone are enough to draw a timeline, so this no longer waits for
     // a video that may never arrive.
-    setZoom(DEFAULT_PX_PER_SEC, 0);
+    setZoom(defaultZoom(), 0);
     drawTimelineRuler();
     renderTimelineBlocks();
     video?.addEventListener('loadedmetadata', () => {
@@ -3188,7 +4216,21 @@ document.getElementById('cueFilter').addEventListener('change', renderEvents);
 // submitting their round instead.
 const projectStatus = document.getElementById('projectStatus');
 let previousStatus = projectStatus?.value;
+function paintProjectStatus(status) {
+    if (!projectStatus || !status) return;
+    if ([...(projectStatus.options || [])].some(o => o.value === status)) {
+        projectStatus.value = status;
+        previousStatus = status;
+    }
+}
 projectStatus?.addEventListener('change', async () => {
+    // Completion is not a label to pick: it is what Done records once the
+    // project has been checked and saved.
+    if (projectStatus.value === 'Completed') {
+        projectStatus.value = previousStatus;
+        if (typeof TmWorkspace !== 'undefined') TmWorkspace.startDone?.();
+        return;
+    }
     projectStatus.disabled = true;
     try {
         const res = await fetch(`/studio/${PROJECT_ID}/status`, {
@@ -3256,6 +4298,13 @@ function shiftCues(targets, directionOverride) {
     if (!targets.length) { alert('No cues to shift.'); return; }
     const offset = SubtitleCore.clampShiftOffset(targets, requested);
     if (offset === 0) { alert('That range is already at 00:00:00,000 — nothing to shift earlier.'); return; }
+    if (typeof TmTools !== 'undefined') {
+        const what = targets.length === events.length ? 'all subtitles' : `${targets.length} subtitles`;
+        TmTools.previewTiming(`Shift ${what} ${offset < 0 ? 'earlier' : 'later'} by ${SubtitleCore.timestamp(Math.abs(offset))}`,
+            targets.map(ev => ({ ev, start: SubtitleCore.seconds(ev.startTime) + offset, end: SubtitleCore.seconds(ev.endTime) + offset })),
+            Math.abs(offset - requested) > 0.0005 ? `Limited from ${SubtitleCore.timestamp(Math.abs(requested))} so timing stays within 00:00:00–24:00:00.` : '');
+        return;
+    }
     try {
         const shifted = targets.map(ev => SubtitleCore.shift(ev, offset));
         targets.forEach((ev, i) => { ev.startTime = shifted[i].startTime; ev.endTime = shifted[i].endTime; });
@@ -3269,6 +4318,11 @@ document.getElementById('shiftZero').addEventListener('click', () => {
     if (!events.length) { alert('No cues to shift.'); return; }
     const minStart = Math.min(...events.map(ev => SubtitleCore.seconds(ev.startTime)));
     if (!Number.isFinite(minStart) || minStart <= 0) { alert('The earliest cue already starts at 00:00:00.'); return; }
+    if (typeof TmTools !== 'undefined') {
+        TmTools.previewTiming('Zero out timing', events.map(ev => ({ ev, start: SubtitleCore.seconds(ev.startTime) - minStart, end: SubtitleCore.seconds(ev.endTime) - minStart })),
+            `Every subtitle moves ${SubtitleCore.timestamp(minStart)} earlier so the first starts at 00:00:00.`);
+        return;
+    }
     const shifted = events.map(ev => SubtitleCore.shift(ev, -minStart));
     events.forEach((ev, i) => { ev.startTime = shifted[i].startTime; ev.endTime = shifted[i].endTime; });
     markDirty(); renderEvents(); renderTimelineBlocks();
@@ -3290,6 +4344,9 @@ document.getElementById('shiftRange').addEventListener('click', () => {
     shiftCues(events.slice(from - 1, to));
 });
 document.getElementById('replaceAll').addEventListener('click', () => {
+    // The previewing version (tools.js) covers source text too and respects
+    // locked lines; the direct one below remains the fallback.
+    if (typeof TmTools !== 'undefined') { TmTools.findReplace(); return; }
     if (!translatorOnly()) return;
     const find = document.getElementById('findText').value;
     const replace = document.getElementById('replaceText').value;
@@ -3322,6 +4379,32 @@ document.getElementById('tlZoomIn')?.addEventListener('click', () => setZoom(pxP
 document.getElementById('tlZoomOut')?.addEventListener('click', () => setZoom(pxPerSecond / 1.5));
 document.getElementById('tlZoomFit')?.addEventListener('click', () => setZoom(fitZoom()));
 document.getElementById('tlZoomSel')?.addEventListener('click', zoomToSelection);
+document.getElementById('tlZoom')?.addEventListener('input', e => zoomFromSlider(Number(e.target.value)));
+document.getElementById('tlFollow')?.addEventListener('change', e => {
+    followPlayback = e.target.checked;
+    saveTimelinePrefs();
+    if (followPlayback && playing()) { viewOffset = viewCentre - video.currentTime; kickView(); }
+});
+document.getElementById('tlJump')?.addEventListener('change', e => {
+    jumpSeconds = Number(e.target.value) || 2;
+    saveTimelinePrefs();
+});
+document.getElementById('tlSnapCuts')?.addEventListener('change', e => {
+    snapToCuts = e.target.checked;
+    saveTimelinePrefs();
+});
+document.getElementById('tlShowText')?.addEventListener('change', e => {
+    showBlockText = e.target.checked;
+    saveTimelinePrefs();
+    renderTimelineBlocks();
+});
+document.getElementById('tlRedetectShots')?.addEventListener('click', () => loadShotChanges({ force: true }));
+document.getElementById('tlWaveScale')?.addEventListener('change', e => {
+    waveScale = e.target.value;
+    saveTimelinePrefs();
+    drawTimelineRuler();
+});
+document.getElementById('tlStatus')?.addEventListener('click', () => document.getElementById('tlAudioMenuBtn')?.click());
 
 // ── Sound ───────────────────────────────────────────
 document.getElementById('tlPlayPreroll')?.addEventListener('click', playWithPreroll);
@@ -3393,6 +4476,14 @@ tlAudioMenuBtn?.addEventListener('click', e => {
     e.stopPropagation();
     const open = tlAudioMenu.hidden;
     tlAudioMenu.hidden = !open;
+    // The toolbar scrolls sideways and clips anything inside it, so the menu
+    // is fixed-position and placed against the button: above it, right-aligned.
+    if (open) {
+        const r = tlAudioMenuBtn.getBoundingClientRect();
+        const w = tlAudioMenu.offsetWidth;
+        tlAudioMenu.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, r.right - w)) + 'px';
+        tlAudioMenu.style.bottom = (window.innerHeight - r.top + 8) + 'px';
+    }
     tlAudioMenuBtn.setAttribute('aria-expanded', String(open));
     tlAudioMenuBtn.classList.toggle('tm-toggle-on', open);
     if (open) describeAnalysis();
@@ -3425,6 +4516,16 @@ document.addEventListener('keydown', e => {
     if (p.snapToAudio != null) snapToAudio = !!p.snapToAudio;
     if (p.scrubAudio != null) scrubAudio = !!p.scrubAudio;
     if (Number.isFinite(p.prerollSecs)) prerollSecs = p.prerollSecs;
+    if (p.showBlockText != null) showBlockText = !!p.showBlockText;
+    if (p.snapToCuts != null) snapToCuts = !!p.snapToCuts;
+    if (p.waveScale === 'db' || p.waveScale === 'linear') waveScale = p.waveScale;
+    if (p.followPlayback != null) followPlayback = !!p.followPlayback;
+    if (Number.isFinite(p.jumpSeconds)) jumpSeconds = p.jumpSeconds;
+    check('tlFollow', followPlayback);
+    set('tlJump', String(jumpSeconds));
+    set('tlWaveScale', waveScale);
+    check('tlShowText', showBlockText);
+    check('tlSnapCuts', snapToCuts);
 
     set('tlGain', Math.round(waveGain * 100));
     set('tlWaveView', waveView);

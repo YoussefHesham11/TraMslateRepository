@@ -163,6 +163,29 @@ Screenshots land in `tests/browser/shots/`.
    cleanup on failed creation, password recovery and lockout, database-backed
    integration tests, and a documented backup/deployment process.
 
-Legacy empty files remain: `Controllers/SubtitleController.cs`,
-`Views/Subtitle/Editor.cshtml` and `Views/Project/Dashboard.cshtml` are unused
-and can be deleted once nothing is found to reference them.
+## Review and completeness pass
+
+- **Review data now stays on its line.** Saves used to match stored rows by
+  position. Inserting, splitting, merging or deleting a line therefore moved
+  every revisor suggestion, flag and note below it onto the wrong line. Rows are
+  now matched by id, and new lines get their stored id back after saving.
+- **The revisor's editor loads.** Their page leaves out the import and
+  project-status controls, and unguarded references to those stopped the editor
+  script, so an invited revisor saw "Loading…" forever. `revisor-check.cjs` now
+  builds and opens the revisor's seat on every run.
+- **Revisors cannot change the track's shape.** Add, split, merge, duplicate,
+  delete, copy-source and replace-all are hidden for them and refused by the
+  server. Previously those edits were silently dropped or misaligned
+  translations.
+- **Translator and revisor can work at the same time.** A save refused as
+  stale is merged three ways, field by field, against the last version this
+  editor agreed with the server on. It asks for a reload only on a real
+  same-field conflict.
+- **Project settings**: rename, change languages, add, replace or remove the
+  video after creation.
+- **Account page**: change name and password. Sign-in locks out after repeated
+  wrong passwords.
+- The Node test harness (`tests/harness.cjs`) and the browser harness builder
+  were repaired, so both suites run again. There are new live tours for the
+  review round trip and for settings and account.
+- Removed the empty legacy controller and views, and the one-off patch scripts.

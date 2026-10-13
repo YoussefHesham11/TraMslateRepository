@@ -9,6 +9,7 @@
         ProjectStatus.InProgress => "In progress",
         ProjectStatus.UnderReview => "With revisor",
         ProjectStatus.ChangesRequested => "Revised",
+        ProjectStatus.Approved => "Approved",
         _ => "Completed",
     };
 
@@ -41,6 +42,10 @@
 
     <div class="tm-project-card-header">
         <span class="tm-status tm-status-@project.Status.ToString().ToLower()">@StatusLabel(project.Status)</span>
+        @if (project.Status != ProjectStatus.Completed && project.CompletedRevision != null)
+        {
+            <span class="tm-status tm-status-reopened" title="Version @project.CompletedRevision was marked done; it has been edited since and needs Done again.">Edited after done</span>
+        }
         <span class="tm-project-date" title="Last edited @project.UpdatedAt.ToString("f")">
             <i class="bi bi-clock-history"></i> @LastEdited(project.UpdatedAt)
         </span>
@@ -128,6 +133,10 @@
         </a>
         @if (!asRevisor)
         {
+            <a asp-controller="Project" asp-action="Settings" asp-route-id="@project.Id"
+               class="tm-btn-sm" title="Project settings — title, languages and video">
+                <i class="bi bi-gear"></i>
+            </a>
             <button class="tm-btn-sm tm-delete-project-btn"
                     data-id="@project.Id" data-title="@project.Title" title="Delete project"
                     aria-label="Delete @project.Title">

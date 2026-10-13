@@ -18,3 +18,26 @@ namespace TraMslate.Models
         Approved = 3,
     }
 }
+
+namespace TraMslate.Models
+{
+    /// <summary>Marks a person puts on a line to say it needs more work.</summary>
+    [System.Flags]
+    public enum CueFlags
+    {
+        None = 0,
+        NeedsTranslation = 1,
+        NeedsTiming = 2,
+        NeedsReview = 4,
+        /// <summary>The comment asks something that needs an answer.</summary>
+        Question = 8,
+    }
+
+    /// <summary>Where a line stands in review, independent of its translation status.</summary>
+    public enum CueReviewState
+    {
+        NotReviewed = 0,
+        Reviewed = 1,
+        ChangesNeeded = 2,
+    }
+}

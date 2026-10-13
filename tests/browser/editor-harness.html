@@ -10,6 +10,7 @@
 
 <link rel="stylesheet" href="../../wwwroot/css/timeline.css" />
 <link rel="stylesheet" href="../../wwwroot/css/cues.css" />
+<link rel="stylesheet" href="../../wwwroot/css/quality.css" />
 <style>
     /* The editor shell is pinned to the viewport (see .tm-editor-wrap),
        so the page itself never scrolls and .tm-main adds no padding
@@ -28,11 +29,28 @@
     <div class="tm-logo">Tra<span>M</span>slate</div>
     <nav class="tm-topnav-links"><a href="#">Dashboard</a><a href="#">New Project</a><a href="#">Shortcuts</a></nav>
   </div>
+
+<div class="tm-topnav-center">
+    <div class="tm-done-area" id="doneArea">
+        
+            <button type="button" class="tm-done-btn" id="btnDone" disabled aria-describedby="doneReason">
+                <i class="bi bi-check2-circle"></i> Done
+            </button>
+        
+        <div class="tm-done-info">
+            <span class="tm-done-reason" id="doneReason" role="status">Checking the project…</span>
+            <button type="button" class="tm-link-btn" id="btnViewIssues" aria-controls="issuesPanel" aria-expanded="false">
+                <i class="bi bi-list-check"></i> View issues <span class="tm-issues-count" id="issuesCount" hidden></span>
+            </button>
+        </div>
+    </div>
+</div>
   <div class="tm-topnav-right"><span class="tm-nav-user">translator</span></div>
 </div>
 <main class="tm-main">
 <div class="tm-editor-wrap">
     <input type="hidden" name="__RequestVerificationToken" value="x" />
+    <div id="projectMeta" hidden data-title="The Bureau — S01E04" data-source="English" data-target="Arabic"></div>
 
     <!-- ── Top Bar ── -->
     <div class="tm-editor-topbar">
@@ -52,14 +70,21 @@
             </div>
         </div>
         <div class="tm-editor-topbar-right">
-            <select id="projectStatus" class="tm-speed-select" aria-label="Project status">
-                <option value="InProgress">In progress</option><option value="UnderReview">Under review</option><option value="Completed">Completed</option>
-            </select>
+            
+                <select id="projectStatus" class="tm-speed-select" aria-label="Project status">
+                    <option value="InProgress">In progress</option>
+                    <option value="UnderReview">With revisor</option>
+                    <option value="ChangesRequested">Revised</option>
+                    <option value="Completed">Completed</option>
+                </select>
+            
             <span id="saveStatus" role="status" class="tm-save-status">Loading…</span>
-            <label class="tm-btn-sm" style="cursor:pointer;" title="Import an SRT/VTT subtitle file, or a Word document with one dialogue line per paragraph">
-                <i class="bi bi-file-earmark-arrow-up"></i> Import Script
-                <input type="file" id="importScript" accept=".srt,.vtt,.docx" style="display:none;" />
-            </label>
+            
+                <label class="tm-btn-sm" style="cursor:pointer;" title="Import an SRT, VTT or ASS subtitle file, or a Word document — you see a preview first">
+                    <i class="bi bi-file-earmark-arrow-up"></i> Import Script
+                    <input type="file" id="importScript" accept=".srt,.vtt,.ass,.ssa,.docx" style="display:none;" />
+                </label>
+            
             <select id="fpsSelect" class="tm-speed-select" title="Frames per second">
                 <option value="23.976">23.976 fps</option>
                 <option value="24">24 fps</option>
@@ -72,11 +97,33 @@
             <button class="tm-btn-sm tm-btn-sm-primary" id="btnSave">
                 <i class="bi bi-floppy"></i> Save
             </button>
+            
+                <form
+                      method="post" style="margin:0;">
+                    <input type="hidden" name="__RequestVerificationToken" value="x" />
+                    <button type="submit" class="tm-btn-sm" id="btnSendForReview"
+                            title="Hand this project to the revisor">
+                        <i class="bi bi-send"></i> Send for review
+                    </button>
+                </form>
+                <a
+                   class="tm-icon-btn" title="People on this project and its revision history">
+                    <i class="bi bi-people"></i>
+                </a>
+                
+                    <a
+                       class="tm-icon-btn" title="Project settings — title, languages and video">
+                        <i class="bi bi-gear"></i>
+                    </a>
+                
+            
         </div>
     </div>
 
     <!-- ── Banner: crash recovery, save conflicts ── -->
     <div class="tm-banner" id="editorBanner" role="status" hidden></div>
+
+    
 
     <!-- ── Main Editor Body ── -->
     <div class="tm-editor-body">
@@ -151,7 +198,13 @@
                 <span class="tm-events-title">Subtitles</span>
                 <span class="tm-events-count" id="cueCount"></span>
                 <span class="tm-events-spacer"></span>
+                <button class="tm-icon-btn-sm tm-suggestions-toggle" id="btnToggleSuggestions"
+                        title="Show or hide the revisor's suggestions column" aria-pressed="false">
+                    <i class="bi bi-lightbulb"></i>
+                    <span class="tm-suggestion-count" id="suggestionCount" hidden></span>
+                </button>
                 <button class="tm-icon-btn-sm" id="btnSwapColumns" title="Swap original/translation columns"><i class="bi bi-arrow-left-right"></i></button>
+                <button class="tm-icon-btn-sm" id="btnExpandedView" title="Expand every cue into a full editing card" aria-pressed="false"><i class="bi bi-arrows-expand"></i></button>
                 <button class="tm-icon-btn-sm" id="btnCardLayout" title="Toggle side-by-side / stacked cue layout"><i class="bi bi-layout-split"></i></button>
                 <button class="tm-icon-btn-sm" id="btnToggleTools" title="Show/hide search, filters, and quick tools"><i class="bi bi-sliders"></i></button>
                 <button class="tm-btn-sm tm-btn-sm-primary" id="btnAddEvent" title="Add new subtitle line">
@@ -167,6 +220,7 @@
                 <span class="tm-col-header-translation">Translation</span>
                 <span></span>
             </div>
+            <section class="tm-issues-panel" id="issuesPanel" aria-label="Issues" hidden></section>
             <div class="tm-workspace-tools" id="workspaceTools" hidden>
                 <div class="tm-progress-summary"><strong id="cueProgress">Loading subtitles…</strong><span id="cueIssues"></span></div>
                 <progress id="translationProgress" max="100" value="0" aria-label="Translation progress"></progress>
@@ -180,6 +234,15 @@
                         <option value="status-1">Marked done</option>
                         <option value="status-2">Marked for review</option>
                         <option value="status-3">Approved</option>
+                        <option value="suggested">Has a suggestion</option>
+                        <option value="flagged">Flagged by revisor</option>
+                        <option value="unfinished">Unfinished (untranslated, marked or questions)</option>
+                        <option value="marked">Marked for more work</option>
+                        <option value="bookmarked">Bookmarked</option>
+                        <option value="errors">With errors</option>
+                        <option value="warnings">With warnings</option>
+                        <option value="reviewed">Reviewed</option>
+                        <option value="notReviewed">Not reviewed</option>
                     </select>
                 </div>
                 <div class="tm-tool-row tm-tool-icons">
@@ -206,9 +269,48 @@
                         <label>Max duration (s) <input type="number" id="specMaxDur" min="1" max="30" step="0.5" /></label>
                         <label>Min gap (s) <input type="number" id="specGap" min="0" max="2" step="0.01" /></label>
                     </div>
+                    <p class="tm-tool-hint" style="margin-top:10px;">Project rules</p>
+                    <div class="tm-rule-grid">
+                        <label><input type="checkbox" id="ruleRequireTranslation" checked /> Every subtitle must be translated</label>
+                        <label><input type="checkbox" id="ruleRequireReview" /> Every subtitle must be marked reviewed</label>
+                        <label><input type="checkbox" id="ruleAllowOverlaps" /> Overlapping subtitles are allowed</label>
+                        <label>Warnings before Done
+                            <select id="ruleWarnings" class="tm-speed-select">
+                                <option value="acknowledge">Must be reviewed</option>
+                                <option value="block">Must be fixed or waived</option>
+                                <option value="never">Do not block</option>
+                            </select>
+                        </label>
+                        <label>Check formatting for
+                            <select id="ruleFormat" class="tm-speed-select">
+                                <option value="srt">SRT</option>
+                                <option value="vtt">WebVTT</option>
+                                <option value="ass">ASS</option>
+                                <option value="txt">Plain text</option>
+                            </select>
+                        </label>
+                    </div>
                     <p class="tm-tool-hint">Every quality warning, the character counter and the reading-speed badge follow these numbers. The presets are sensible starting points, not certified specs — broadcasters and streamers revise their guidelines, so check your client's current one and adjust here. Your changes are kept with this project.</p>
                 </details>
+                <details class="tm-more-tools tm-glossary-tools">
+                    <summary><i class="bi bi-journal-bookmark"></i> Glossary</summary>
+                    <div class="tm-tool-row">
+                        <input id="glossarySource" placeholder="Source term" aria-label="Glossary source term" dir="auto" />
+                        <input id="glossaryTarget" placeholder="Required translation" aria-label="Glossary translation" dir="auto" />
+                    </div>
+                    <div class="tm-tool-row">
+                        <input id="glossaryNote" placeholder="Note (optional)" aria-label="Glossary note" dir="auto" />
+                        <button class="tm-btn-sm" id="glossaryAdd" type="button">Add term</button>
+                    </div>
+                    <ul class="tm-glossary-list" id="glossaryList"></ul>
+                    <p class="tm-tool-hint">Subtitles whose source contains a term but whose translation does not use the agreed rendering get a warning. Inflected forms can be waived per line.</p>
+                </details>
                 <details class="tm-more-tools"><summary><i class="bi bi-three-dots"></i> More tools</summary>
+                    <div class="tm-tool-row">
+                        <button class="tm-btn-sm" id="btnHistory" type="button"><i class="bi bi-clock-history"></i> Version history…</button>
+                        <button class="tm-btn-sm" id="btnSaveVersion" type="button"><i class="bi bi-bookmark-plus"></i> Save as named version…</button>
+                        <button class="tm-btn-sm" id="btnSaveCopy" type="button"><i class="bi bi-files"></i> Save a copy as new project…</button>
+                    </div>
                     <p class="tm-tool-hint" style="margin-top:10px;">Shift timing</p>
                     <div class="tm-tool-row">
                         <label style="font-size:0.8rem; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
@@ -232,8 +334,24 @@
                         <button class="tm-btn-sm" id="shiftRange" title="Shift only the cues numbered in this range">Shift range</button>
                     </div>
                     <p class="tm-tool-hint">Enter the amount as HH:MM:SS:FF (frames use the fps selector above), HH:MM:SS, MM:SS, or plain seconds, then pick Earlier or Later — handy when the whole track has drifted out of sync with the video. A shift that would cross 00:00:00 or 24:00:00 is trimmed to the farthest safe point rather than blocked. "Zero out timing" rebases every cue so the earliest one starts at 00:00:00 — useful for scripts timed against a 1-hour broadcast offset. Cue numbers refer to the # shown on each card.</p>
+                    <p class="tm-tool-hint" style="margin-top:10px;">More timing tools</p>
+                    <div class="tm-tool-row">
+                        <button class="tm-btn-sm" id="btnSyncTwo" type="button" title="Fix timing that drifts, using two subtitles whose correct times you know">Sync with two points…</button>
+                        <button class="tm-btn-sm" id="btnConvertFps" type="button" title="Re-time every subtitle for a video converted to another frame rate">Convert frame rate…</button>
+                        <button class="tm-btn-sm" id="btnBulk" type="button" title="Change all selected subtitles at once, with a preview">Bulk actions on selected…</button>
+                    </div>
+                    <p class="tm-tool-hint">SRT, VTT and ASS files store real times: the fps selector never moves them — it only sets how frames are counted and how frame-based scripts (HH:MM:SS:FF) are read. To re-time for a video that runs at another speed, use Convert frame rate.</p>
                     <p class="tm-tool-hint" style="margin-top:10px;">Find &amp; replace</p>
-                    <div class="tm-tool-row"><input id="findText" placeholder="Find in translations" aria-label="Find text" /><input id="replaceText" placeholder="Replace with" aria-label="Replacement text" /><button class="tm-btn-sm" id="replaceAll">Replace all</button></div>
+                    <div class="tm-tool-row"><input id="findText" placeholder="Find" aria-label="Find text" dir="auto" /><input id="replaceText" placeholder="Replace with" aria-label="Replacement text" dir="auto" /><button class="tm-btn-sm" id="replaceAll">Replace all…</button></div>
+                    <div class="tm-tool-row tm-find-options">
+                        <select id="findScope" class="tm-speed-select" aria-label="Where to replace">
+                            <option value="translation">In translations</option>
+                            <option value="source">In source text (unlocked lines)</option>
+                            <option value="both">In both</option>
+                        </select>
+                        <label><input type="checkbox" id="findCase" /> Match case</label>
+                        <label><input type="checkbox" id="findWhole" /> Whole words</label>
+                    </div>
                     <p class="tm-tool-hint">Every shortcut below is the default — customize any of them on the <a style="color:var(--accent);">Keyboard Shortcuts</a> page.<br />Ctrl/⌘ S: save · Ctrl/⌘ Z: undo · Ctrl/⌘ Shift Z: redo<br />Outside text fields: Space: play/pause · ← →: seek 1s · Shift + ← →: skip 5s · , / .: step one frame · I / O: mark timing · ↑ / ↓ with Ctrl: select cue.<br />Quality guidance: 42 characters per line, 2 lines, up to 21 characters/second.</p>
                 </details>
             </div>
@@ -247,62 +365,182 @@
         <div class="tm-timeline-resize-grip"></div>
     </div>
     <div class="tm-timeline-toolbar">
-        <div class="tm-timeline-toolbar-group">
-            <button class="tm-icon-btn-sm" id="tlRewind" title="Rewind 10 seconds"><i class="bi bi-rewind-fill"></i></button>
-            <button class="tm-icon-btn-sm" id="tlPrevSub" title="Previous subtitle"><i class="bi bi-skip-start-fill"></i></button>
-            <button class="tm-icon-btn-sm" id="tlPlayPause" title="Play / Pause (Space)"><i class="bi bi-play-fill"></i></button>
-            <button class="tm-icon-btn-sm" id="tlStop" title="Stop and return to the selected cue's start"><i class="bi bi-stop-fill"></i></button>
-            <button class="tm-icon-btn-sm" id="tlNextSub" title="Next subtitle"><i class="bi bi-skip-end-fill"></i></button>
-            <button class="tm-icon-btn-sm" id="tlFastForward" title="Fast-forward 10 seconds"><i class="bi bi-fast-forward-fill"></i></button>
-            <span class="tm-tool-sep"></span>
-            <button class="tm-icon-btn-sm" id="tlPlaySelected" title="Play only the selected cue's range"><i class="bi bi-play-circle"></i></button>
-            <label class="tm-timeline-toggle" title="Pause automatically at the selected cue's out-time">
-                <input type="checkbox" id="tlAutoPauseOut" /> Auto-pause
-            </label>
+        <div class="tm-tl-group" role="group" aria-label="Playback">
+            <span class="tm-tl-timecode" id="tlTimecode" title="Playhead position">00:00:00:00</span>
+            <button class="tm-tl-btn" id="tlPrevSub" title="Previous subtitle"><i class="bi bi-skip-start-fill"></i></button>
+            <button class="tm-tl-btn tm-tl-btn-play" id="tlPlayPause" title="Play / Pause (Space)"><i class="bi bi-play-fill"></i></button>
+            <button class="tm-tl-btn" id="tlNextSub" title="Next subtitle"><i class="bi bi-skip-end-fill"></i></button>
+            <button class="tm-tl-btn" id="tlPlaySelected" title="Play only the selected subtitle"><i class="bi bi-play-circle"></i></button>
         </div>
-        <div class="tm-timeline-toolbar-group">
-            <button class="tm-icon-btn-sm" id="tlNudgeBack" title="Move selection slightly earlier"><i class="bi bi-arrow-left-short"></i></button>
-            <button class="tm-icon-btn-sm" id="tlNudgeFwd" title="Move selection slightly later"><i class="bi bi-arrow-right-short"></i></button>
-            <button class="tm-icon-btn-sm" id="tlShrink" title="Shorten duration"><i class="bi bi-dash-lg"></i></button>
-            <button class="tm-icon-btn-sm" id="tlGrow" title="Extend duration"><i class="bi bi-plus-lg"></i></button>
-            <select id="tlNudgeStep" class="tm-speed-select" title="Step size for nudge/duration buttons">
-                <option value="frame">1 frame</option>
-                <option value="10">10 ms</option>
-                <option value="50" selected>50 ms</option>
-                <option value="100">100 ms</option>
-                <option value="500">500 ms</option>
-            </select>
-            <span class="tm-tool-sep"></span>
-            <button class="tm-icon-btn-sm" id="tlDuplicate" title="Duplicate selected cue"><i class="bi bi-copy"></i></button>
-            <button class="tm-icon-btn-sm" id="tlLock" title="Lock / unlock selected cue(s)"><i class="bi bi-unlock"></i></button>
-            <label class="tm-timeline-toggle" title="Snap to the playhead, nearby cue edges, and frame boundaries while dragging">
+
+        <div class="tm-tl-group" role="group" aria-label="Timing">
+            <button class="tm-tl-btn tm-tl-btn-label" id="tlSetIn" title="Set the selected subtitle's in-time to the playhead"><i class="bi bi-box-arrow-in-right"></i><span>In</span></button>
+            <button class="tm-tl-btn tm-tl-btn-label" id="tlSetOut" title="Set the selected subtitle's out-time to the playhead"><i class="bi bi-box-arrow-in-left"></i><span>Out</span></button>
+            <button class="tm-tl-btn tm-tl-btn-label" id="tlSplitHere" title="Split the selected subtitle at the playhead"><i class="bi bi-scissors"></i><span>Split</span></button>
+            <button class="tm-tl-btn tm-tl-btn-label" id="tlJoinNext" title="Merge the selected subtitle with the next one"><i class="bi bi-union"></i><span>Merge</span></button>
+            <button class="tm-tl-btn tm-tl-btn-label" id="tlFitSpeech" title="Fit the selected subtitle to the dialogue under it"><i class="bi bi-soundwave"></i><span>Fit</span></button>
+        </div>
+
+        <div class="tm-tl-group tm-tl-group-end" role="group" aria-label="View">
+            <button type="button" class="tm-tl-status" id="tlStatus" hidden title="Background analysis — click for details"></button>
+            <label class="tm-tl-check" title="Snap edges to shot changes, dialogue, other subtitles, the playhead and frames while dragging">
                 <input type="checkbox" id="tlSnap" checked /> Snap
             </label>
-            <span class="tm-tool-sep"></span>
-            <button class="tm-icon-btn-sm" id="tlZoomOut" title="Zoom out"><i class="bi bi-zoom-out"></i></button>
-            <button class="tm-icon-btn-sm" id="tlZoomFit" title="Fit whole timeline to window"><i class="bi bi-arrows-angle-contract"></i></button>
-            <button class="tm-icon-btn-sm" id="tlZoomIn" title="Zoom in"><i class="bi bi-zoom-in"></i></button>
+            <button class="tm-tl-btn" id="tlZoomOut" title="Zoom out (Ctrl + wheel on the timeline)"><i class="bi bi-dash-lg"></i></button>
+            <input type="range" class="tm-tl-range tm-tl-zoom" id="tlZoom" min="0" max="1000" value="500"
+                   title="Zoom" aria-label="Zoom" />
+            <button class="tm-tl-btn" id="tlZoomIn" title="Zoom in (Ctrl + wheel on the timeline)"><i class="bi bi-plus-lg"></i></button>
+            <span class="tm-tl-menu-wrap">
+                <button class="tm-tl-btn" id="tlAudioMenuBtn" title="More timeline tools and options"
+                        aria-haspopup="true" aria-expanded="false"><i class="bi bi-three-dots"></i></button>
+                <div class="tm-tl-menu" id="tlAudioMenu" hidden>
+                    <p class="tm-tl-menu-title">Playback</p>
+                    <div class="tm-tl-menu-grid">
+                        <button type="button" class="tm-tl-menu-btn" id="tlRewind"><i class="bi bi-rewind-fill"></i> Back 10s</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlFastForward"><i class="bi bi-fast-forward-fill"></i> Forward 10s</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlStop"><i class="bi bi-stop-fill"></i> Stop at cue start</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlPlayPreroll"><i class="bi bi-skip-backward-circle"></i> Play with run-up</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlLoop" aria-pressed="false"><i class="bi bi-arrow-repeat"></i> Loop subtitle</button>
+                    </div>
+                    <label class="tm-tl-menu-row" for="tlSpeed">
+                        <span>Speed</span>
+                        <select id="tlSpeed" class="tm-speed-select">
+                            <option value="0.25">0.25&times;</option>
+                            <option value="0.5">0.5&times;</option>
+                            <option value="0.75">0.75&times;</option>
+                            <option value="1" selected>1&times;</option>
+                            <option value="1.5">1.5&times;</option>
+                            <option value="2">2&times;</option>
+                        </select>
+                        <span></span>
+                    </label>
+                    <div class="tm-tl-menu-row">
+                        <button type="button" class="tm-tl-btn" id="tlMute" title="Mute / unmute"><i class="bi bi-volume-up-fill"></i></button>
+                        <input type="range" class="tm-tl-range" id="tlVolume" min="0" max="100" value="100" aria-label="Volume" />
+                        <span></span>
+                    </div>
+                    <label class="tm-tl-menu-row" for="tlPreroll">
+                        <span>Run-up / loop padding</span>
+                        <input type="range" class="tm-tl-range" id="tlPreroll" min="0" max="5000" step="250" value="1500" />
+                        <output id="tlPrerollOut">1.5s</output>
+                    </label>
+                    <label class="tm-tl-menu-check"><input type="checkbox" id="tlAutoPauseOut" /><span>Pause at the selected subtitle's out-time</span></label>
+                    <label class="tm-tl-menu-check"><input type="checkbox" id="tlScrubAudio" /><span>Keep playing while scrubbing the ruler</span></label>
+                    <label class="tm-tl-menu-check"><input type="checkbox" id="tlFollow" checked /><span>Keep the playhead centred while playing</span></label>
+                    <label class="tm-tl-menu-row" for="tlJump">
+                        <span>Short jump</span>
+                        <select id="tlJump" class="tm-speed-select">
+                            <option value="0.5">0.5 s</option><option value="1">1 s</option><option value="2" selected>2 s</option>
+                            <option value="3">3 s</option><option value="5">5 s</option>
+                        </select>
+                        <span></span>
+                    </label>
+
+                    <p class="tm-tl-menu-title">Editing</p>
+                    <div class="tm-tl-menu-grid">
+                        <button type="button" class="tm-tl-menu-btn" id="tlNudgeBack"><i class="bi bi-arrow-left-short"></i> Move earlier</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlNudgeFwd"><i class="bi bi-arrow-right-short"></i> Move later</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlShrink"><i class="bi bi-dash-lg"></i> Shorter</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlGrow"><i class="bi bi-plus-lg"></i> Longer</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlPrevSpeech"><i class="bi bi-chevron-bar-left"></i> Previous dialogue</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlNextSpeech"><i class="bi bi-chevron-bar-right"></i> Next dialogue</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlDuplicate"><i class="bi bi-copy"></i> Duplicate</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlLock"><i class="bi bi-lock"></i> Lock / unlock</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlZoomSel"><i class="bi bi-bounding-box"></i> Zoom to subtitle</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlZoomFit"><i class="bi bi-arrows-angle-contract"></i> Whole film</button>
+                    </div>
+                    <label class="tm-tl-menu-row" for="tlNudgeStep">
+                        <span>Step</span>
+                        <select id="tlNudgeStep" class="tm-speed-select">
+                            <option value="frame">1 frame</option>
+                            <option value="10">10 ms</option>
+                            <option value="50" selected>50 ms</option>
+                            <option value="100">100 ms</option>
+                            <option value="500">500 ms</option>
+                        </select>
+                        <span></span>
+                    </label>
+                    <label class="tm-tl-menu-check"><input type="checkbox" id="tlSnapCuts" checked /><span>Snap to shot changes</span></label>
+                    <label class="tm-tl-menu-check"><input type="checkbox" id="tlSnapAudio" checked /><span>Snap to where dialogue starts and stops</span></label>
+
+                    <p class="tm-tl-menu-title">Display</p>
+                    <label class="tm-tl-menu-row" for="tlGain">
+                        <span>Wave size</span>
+                        <input type="range" class="tm-tl-range" id="tlGain" min="25" max="400" value="100" />
+                        <output id="tlGainOut">1.0&times;</output>
+                    </label>
+                    <label class="tm-tl-menu-row" for="tlWaveView">
+                        <span>Shape</span>
+                        <select id="tlWaveView" class="tm-speed-select">
+                            <option value="both" selected>Peaks + loudness</option>
+                            <option value="peak">Peaks only</option>
+                            <option value="rms">Loudness only</option>
+                            <option value="bars">Bars</option>
+                        </select>
+                        <span></span>
+                    </label>
+                    <label class="tm-tl-menu-row" for="tlWaveScale">
+                        <span>Scale</span>
+                        <select id="tlWaveScale" class="tm-speed-select">
+                            <option value="db" selected>Decibels — quiet speech stays visible</option>
+                            <option value="linear">Linear</option>
+                        </select>
+                        <span></span>
+                    </label>
+                    <label class="tm-tl-menu-check"><input type="checkbox" id="tlShowText" checked /><span>Show subtitle text in the boxes</span></label>
+                    <label class="tm-tl-menu-check"><input type="checkbox" id="tlShowSpeech" /><span>Shade detected dialogue</span></label>
+
+                    <p class="tm-tl-menu-title">Analysis</p>
+                    <p class="tm-tl-menu-note" id="tlAudioInfo">Audio: not analysed yet.</p>
+                    <p class="tm-tl-menu-note" id="tlShotInfo">Shot changes: waiting for the audio first.</p>
+                    <div class="tm-tl-menu-grid">
+                        <button type="button" class="tm-tl-menu-btn" id="tlReanalyse"><i class="bi bi-soundwave"></i> Re-read audio</button>
+                        <button type="button" class="tm-tl-menu-btn" id="tlRedetectShots"><i class="bi bi-film"></i> Re-scan shots</button>
+                    </div>
+                    <p class="tm-tl-menu-note tm-tl-menu-help">
+                        Drag on empty waveform to draw a subtitle &middot; drag a box or its edges to retime it &middot;
+                        drag the ruler to scrub &middot; wheel to scroll, Ctrl + wheel to zoom &middot; Alt-drag to pan.
+                    </p>
+                </div>
+            </span>
         </div>
     </div>
+    
+
     <div class="tm-timeline-wrap" id="timelineWrap">
         <div class="tm-timeline-scroll" id="timelineScroll">
+            <canvas id="waveformCanvas"></canvas>
             <div class="tm-timeline-inner" id="timelineInner">
-                <canvas id="waveformCanvas"></canvas>
-                <div class="tm-timeline-cursor" id="timelineCursor"></div>
                 <div class="tm-timeline-events" id="timelineEvents"></div>
-                <div class="tm-timeline-timecodes" id="timelineTimecodes"></div>
+            </div>
+            <canvas class="tm-timeline-overlay" id="timelineOverlay"></canvas>
+            <div class="tm-timeline-hover" id="timelineHover"></div>
+            <div class="tm-timeline-cursor" id="timelineCursor"></div>
+            <div class="tm-timeline-readout" id="timelineReadout" hidden></div>
+            <div class="tm-timeline-progress" id="timelineProgress" hidden>
+                <span class="tm-timeline-progress-label" id="timelineProgressText">Analysing audio…</span>
+                <span class="tm-timeline-progress-track"><span class="tm-timeline-progress-fill" id="timelineProgressFill"></span></span>
             </div>
         </div>
+        <canvas class="tm-timeline-overview" id="timelineOverview" title="Whole film — click or drag to travel"></canvas>
     </div>
 
 </div>
 
 
 </main>
+<script>window.__HARNESS_ROLE = 'Translator';</script>
 <script src="./harness-boot.js"></script>
 <script src="../../wwwroot/js/subtitle-core.js"></script>
+<script src="../../wwwroot/js/waveform.js"></script>
+<script src="../../wwwroot/js/shots.js"></script>
 <script src="../../wwwroot/js/shortcuts.js"></script>
+<script src="../../wwwroot/js/quality.js"></script>
+<script src="../../wwwroot/js/formats.js"></script>
 <script src="../../wwwroot/js/editor.js"></script>
+<script src="../../wwwroot/js/workspace.js"></script>
+<script src="../../wwwroot/js/transfer.js"></script>
+<script src="../../wwwroot/js/tools.js"></script>
 <script src="./harness-measure.js"></script>
 </body>
 </html>

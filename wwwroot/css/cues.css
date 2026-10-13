@@ -120,6 +120,23 @@
 /* Auto-grown by the editor, so no inner scrollbar and no resize grip. */
 .tm-cue-item-open textarea { resize: none; overflow: hidden; }
 
+/* ── Expanded view: every cue is a card ────────── */
+/* The other cards keep the open card's shape but stay flat, so the one being
+   edited still stands out. Their boxes size to their text in CSS; measuring
+   each one in script would be slow on a feature-length track. */
+.tm-cue-item-expanded {
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin: 6px 8px;
+    scroll-margin: 12px;
+}
+.tm-cue-item-expanded .tm-event-meta { margin-bottom: 8px; }
+.tm-cue-item-expanded textarea { resize: none; overflow: hidden; field-sizing: content; }
+.tm-cue-item-expanded .tm-quality-hint:empty { display: none; }
+.tm-expanded-view .tm-cue-headrow { display: none; }
+
+.tm-icon-btn-sm.tm-toggle-on { color: var(--accent); border-color: var(--accent); }
+
 /* ── Panel action bar ──────────────────────────── */
 .tm-events-header { gap: 6px; }
 .tm-events-title  { font-size: 0.82rem; }

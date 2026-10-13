@@ -233,6 +233,26 @@
         return { min, max, rms, filled, bps: lvl.bps };
     }
 
+    /* The level a typical loud moment reaches, so the timeline can scale the
+       wave to fill its lane. Dialogue stems are routinely mastered 20 dB
+       below full scale; drawn raw, the whole track is a flat line. The 99.5th
+       percentile ignores the odd door slam that would otherwise set the
+       scale for everything else. */
+    function loudnessReference(levels) {
+        const lvl = levels.reduce(
+            (best, l) => Math.abs(l.bps - SPEECH_BPS) < Math.abs(best.bps - SPEECH_BPS) ? l : best,
+            levels[0]);
+        const vals = new Float64Array(lvl.count);
+        let n = 0;
+        for (let i = 0; i < lvl.count; i++) {
+            const v = Math.max(-lvl.min[i], lvl.max[i]) / 127;
+            if (v > 0.004) vals[n++] = v;
+        }
+        if (!n) return 1;
+        const sorted = vals.subarray(0, n).sort();
+        return Math.max(0.02, sorted[Math.min(n - 1, Math.floor(n * 0.995))]);
+    }
+
     // ── Voice activity ────────────────────────────────────────────────
     /* Thresholds are taken from the track's own statistics rather than a
        fixed number: a quiet documentary and a loud action mix have nothing
@@ -345,7 +365,7 @@
                 min: new Int8Array(cached.min), max: new Int8Array(cached.max), rms: new Uint8Array(cached.rms),
             };
             const levels = buildPyramid(level0);
-            return { duration: cached.duration, levels, speech: cached.speech, fromCache: true };
+            return { duration: cached.duration, levels, speech: cached.speech, reference: loudnessReference(levels), fromCache: true };
         }
 
         onProgress('download', 0);
@@ -380,11 +400,11 @@
             speech,
         }).catch(() => { /* cache is optional */ });
 
-        return { duration: level0.duration, levels, speech, fromCache: false };
+        return { duration: level0.duration, levels, speech, reference: loudnessReference(levels), fromCache: false };
     }
 
     global.TmWaveform = {
-        analyse, columnsFor, pickLevel, detectSpeech,
+        analyse, columnsFor, pickLevel, detectSpeech, loudnessReference, buildLevel0, buildPyramid,
         regionAt, nearestEdge, stepEdge, regionForRange, forget,
         BASE_BPS,
     };

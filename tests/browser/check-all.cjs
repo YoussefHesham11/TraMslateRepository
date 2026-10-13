@@ -4,7 +4,7 @@
 //     node tests/browser/check-all.cjs --app      # also tour the running app
 //
 // The app tour needs the application listening on http://127.0.0.1:5199 and a
-// reachable database; the other checks need neither. The waveform check
+// reachable database; the other checks need neither. The timeline check
 // serves the repo over a throwaway HTTP port of its own, because fetch()
 // cannot read the sample media over file:// and so the audio side of the
 // timeline is invisible to every other check here.
@@ -20,12 +20,16 @@ const steps = [
     ['Editor workflow', 'workflow-check.cjs', []],
     ["The revisor's seat", 'revisor-check.cjs', []],
     ['Performance with a feature-length track', 'perf.cjs', ['1500']],
-    ['The waveform, its controls and its timing actions', 'waveform-check.cjs', []],
+    ['The timeline: audio, shot changes, boxes and editing', 'timeline-check.cjs', []],
+    ['The workspace: issues, fixes, marks, Done, saving and recovery', 'workspace-check.cjs', []],
+    ['Import and export', 'transfer-check.cjs', []],
+    ['Editing and timing tools', 'tools-check.cjs', []],
 ];
 if (withApp) {
     steps.push(['Live application tour', 'app-tour.cjs', []]);
     steps.push(['Live review round trip', 'review-tour.cjs', []]);
     steps.push(['Live project settings and account', 'settings-tour.cjs', []]);
+    steps.push(['Live saving, history and completion', 'server-tour.cjs', []]);
 }
 
 let failed = 0;

@@ -1,0 +1,121 @@
+@model TraMslate.Models.Project
+@{
+    ViewData["Title"] = "Project settings";
+    var sources = new[] { "English", "French", "Spanish", "German", "Arabic", "Other" };
+    var targets = new[] { "Arabic", "French", "Spanish", "German", "Italian", "Portuguese", "Turkish", "Persian", "Hebrew", "English", "Other" };
+    var hasVideo = !string.IsNullOrEmpty(Model.VideoPath);
+}
+
+<div style="max-width: 560px; margin: 0 auto;">
+
+    <div class="tm-page-header" style="margin-bottom: 28px;">
+        <div>
+            <h1 class="tm-page-title">Project settings</h1>
+            <p class="tm-page-sub">@Model.Title</p>
+        </div>
+        <a asp-controller="Project" asp-action="Editor" asp-route-id="@Model.Id" class="tm-btn" style="width:auto; background:var(--surface2); color:var(--text-muted);">
+            <i class="bi bi-arrow-left"></i> Back to editor
+        </a>
+    </div>
+
+    @if (TempData["SettingsNotice"] is string notice)
+    {
+        <div class="tm-notice tm-notice-ok" role="status"><i class="bi bi-check-circle-fill"></i> @notice</div>
+    }
+
+    <div class="tm-card">
+        <form asp-action="Settings" asp-route-id="@Model.Id" method="post" enctype="multipart/form-data">
+            @Html.AntiForgeryToken()
+            <div asp-validation-summary="All" class="tm-alert-danger"></div>
+
+            <div class="tm-form-group">
+                <label asp-for="Title">Project Title</label>
+                <input asp-for="Title" type="text" maxlength="200" />
+            </div>
+
+            <div class="tm-form-group">
+                <label asp-for="Description">Description <span style="color:var(--text-muted); font-weight:400;">(optional)</span></label>
+                <input asp-for="Description" type="text" maxlength="2000" placeholder="Any notes about this project" />
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                <div class="tm-form-group">
+                    <label asp-for="SourceLanguage">Source Language</label>
+                    <select asp-for="SourceLanguage">
+                        @foreach (var lang in sources.Union(new[] { Model.SourceLanguage }).Where(l => !string.IsNullOrEmpty(l)))
+                        {
+                            <option>@lang</option>
+                        }
+                    </select>
+                </div>
+                <div class="tm-form-group">
+                    <label asp-for="TargetLanguage">Target Language</label>
+                    <select asp-for="TargetLanguage">
+                        @foreach (var lang in targets.Union(new[] { Model.TargetLanguage }).Where(l => !string.IsNullOrEmpty(l)))
+                        {
+                            <option>@lang</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            <div class="tm-form-group">
+                <label>Video File</label>
+                <p class="tm-file-hint" style="margin:0 0 8px;">
+                    @if (hasVideo)
+                    {
+                        <span><i class="bi bi-film"></i> This project has a video. Choose a file below to replace it.</span>
+                    }
+                    else
+                    {
+                        <span><i class="bi bi-film"></i> No video yet — add one to see and time subtitles against the picture.</span>
+                    }
+                </p>
+                <div class="tm-file-drop" id="fileDrop">
+                    <i class="bi bi-cloud-arrow-up"></i>
+                    <p>Drop your video here or <span>browse</span></p>
+                    <p class="tm-file-hint">MP4 or WebM recommended · max 2GB</p>
+                    <input type="file" name="VideoFile" id="videoFile" accept="video/*" />
+                </div>
+                <p id="fileNameDisplay" style="font-size:0.8rem; color:var(--accent); margin-top:6px;"></p>
+                @if (hasVideo)
+                {
+                    <label style="display:flex; align-items:center; gap:8px; font-weight:400; margin-top:8px;">
+                        <input type="checkbox" name="removeVideo" value="true" style="width:auto;" />
+                        Remove the current video
+                    </label>
+                }
+            </div>
+
+            <button type="submit" class="tm-btn tm-btn-primary" style="margin-top:8px;" id="saveSettings">
+                <i class="bi bi-check-lg"></i> Save settings
+            </button>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    const input = document.getElementById('videoFile');
+    const display = document.getElementById('fileNameDisplay');
+    const drop = document.getElementById('fileDrop');
+    const show = () => { display.textContent = input.files[0] ? '📎 ' + input.files[0].name : ''; };
+
+    input.addEventListener('change', show);
+    drop.addEventListener('click', e => { if (e.target !== input) input.click(); });
+    drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('tm-file-drop--over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('tm-file-drop--over'));
+    drop.addEventListener('drop', e => {
+        e.preventDefault();
+        drop.classList.remove('tm-file-drop--over');
+        input.files = e.dataTransfer.files;
+        show();
+    });
+    // A large upload takes a while; say so rather than looking frozen.
+    document.querySelector('form').addEventListener('submit', () => {
+        const button = document.getElementById('saveSettings');
+        button.disabled = true;
+        button.innerHTML = input.files[0] ? '<i class="bi bi-hourglass-split"></i> Uploading video…' : 'Saving…';
+    });
+</script>
+}

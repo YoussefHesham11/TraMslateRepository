@@ -27,6 +27,24 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.LoginPath = "/login";
     options.LogoutPath = "/logout";
     options.AccessDeniedPath = "/login";
+    // The editor talks to the server with fetch(). A redirect to the login
+    // page would arrive as a 200 full of HTML and read as a garbled save, so
+    // those requests get a plain 401/403 the editor can explain instead.
+    static bool IsEditorApi(HttpRequest r) =>
+        r.Headers.Accept.Any(a => a != null && a.Contains("application/json"))
+        || r.Headers.ContainsKey("X-TraMslate-Api");
+    options.Events.OnRedirectToLogin = ctx =>
+    {
+        if (IsEditorApi(ctx.Request)) { ctx.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; }
+        ctx.Response.Redirect(ctx.RedirectUri);
+        return Task.CompletedTask;
+    };
+    options.Events.OnRedirectToAccessDenied = ctx =>
+    {
+        if (IsEditorApi(ctx.Request)) { ctx.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; }
+        ctx.Response.Redirect(ctx.RedirectUri);
+        return Task.CompletedTask;
+    };
 });
 
 // Who may open which project, and what they may change once inside.

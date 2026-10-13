@@ -377,6 +377,9 @@ body {
 .tm-status-inprogress { background: rgba(226,0,26,0.15); color: var(--accent); }
 .tm-status-completed  { background: rgba(255,212,0,0.15); color: var(--success); }
 .tm-status-underreview{ background: rgba(255,179,0,0.15); color: var(--warning); }
+.tm-status-changesrequested { background: rgba(255,179,0,0.15); color: var(--warning); }
+.tm-status-approved  { background: rgba(41,199,111,0.15); color: var(--success); }
+.tm-status-reopened  { background: rgba(154,154,165,0.15); color: var(--text-muted); }
 
 /* ── Cards ───────────────────────────────────────── */
 .tm-card {
